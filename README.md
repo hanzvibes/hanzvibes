@@ -1,6 +1,3 @@
-<h1 align="center">Halo 👋, Saya Raihan Ramadhani</h1>
-<h3 align="center">Saya Adalah Pengangguran</h3>
-
 <p align="left"> <img src="https://komarev.com/ghpvc/?username=hanzvibes&label=Profile%20views&color=0e75b6&style=flat" alt="hanzvibes" /> </p>
 
 <p align="left"> <a href="https://twitter.com/4raehan" target="blank"><img src="https://img.shields.io/twitter/follow/4raehan?logo=twitter&style=for-the-badge" alt="4raehan" /></a> </p>
