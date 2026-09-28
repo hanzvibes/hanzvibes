@@ -591,6 +591,7 @@ public class MainActivity extends Activity {
         String agy = shellQuote(new File(nativeDir, "libagy.so").getAbsolutePath());
         String agyLoader = shellQuote(new File(nativeDir, "libagyld.so").getAbsolutePath());
         String proot = shellQuote(new File(nativeDir, "libproot.so").getAbsolutePath());
+        String prootLoader = shellQuote(new File(nativeDir, "libproot-loader.so").getAbsolutePath());
         String libraryPath = shellQuote(nativeDir);
 
         StringBuilder prelude = new StringBuilder();
@@ -600,6 +601,7 @@ public class MainActivity extends Activity {
                 .append(opencode).append(" \"$@\"; }\n");
         prelude.append("agy() { ")
                 .append("SSL_CERT_FILE=\"$KAI_CA_FILE\" GODEBUG=netdns=go ")
+                .append("PROOT_NO_SECCOMP=1 PROOT_LOADER=").append(prootLoader).append(" ")
                 .append(proot)
                 .append(" -b \"$KAI_RESOLV_CONF:/etc/resolv.conf\" ")
                 .append(" -b /system/bin/sh:/bin/sh ")
