@@ -38,15 +38,7 @@ jobs:
           bun run build
           python3 inline_dist.py
           test ! -d dist/assets
-          python3 - <<'PY'
-from pathlib import Path
-s=Path('dist/index.html').read_text()
-root=s.find('<div id="root"></div>')
-script=s.rfind('<script>')
-assert root >= 0 and script > root, (root, script)
-assert 'TermuxNative' in s and 'createRoot' in s
-print('Verified React mount order:', root, script)
-PY
+          python3 -c "from pathlib import Path; s=Path('dist/index.html').read_text(); root=s.find('<div id=\\\"root\\\"></div>'); script=s.rfind('<script>'); assert root >= 0 and script > root, (root, script); assert 'TermuxNative' in s and 'createRoot' in s; print('Verified React mount order:', root, script)"
 
       - name: Fetch audited Termux source
         run: |
