@@ -24,7 +24,9 @@ public final class AiTerminalViewport {
     private final WebView webView;
     private final TerminalView terminalView;
     private final View nativeComposer;
-    private boolean pageReady;
+    private final View terminalToolbar;
+    private final int terminalToolbarDefaultVisibility;
+    private volatile boolean pageReady;
     private String lastPayload;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
@@ -33,6 +35,10 @@ public final class AiTerminalViewport {
         this.webView = activity.findViewById(R.id.ai_terminal_viewport);
         this.terminalView = activity.findViewById(R.id.terminal_view);
         this.nativeComposer = activity.findViewById(R.id.native_command_composer);
+        this.terminalToolbar = activity.findViewById(R.id.terminal_toolbar_view_pager);
+        this.terminalToolbarDefaultVisibility = terminalToolbar == null
+            ? View.GONE
+            : terminalToolbar.getVisibility();
 
         if (webView == null) return;
 
@@ -68,22 +74,29 @@ public final class AiTerminalViewport {
         if (webView == null || terminalView == null) return;
 
         boolean agent = isAgentSession(session);
-        webView.setVisibility(agent ? View.VISIBLE : View.GONE);
-        terminalView.setAlpha(agent ? 0f : 1f);
-        terminalView.setImportantForAccessibility(agent
-            ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-            : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
-
-        if (nativeComposer != null) {
-            nativeComposer.setVisibility(agent ? View.GONE : View.VISIBLE);
+        if (!agent) {
+            showNativeTerminal();
+            return;
         }
 
-        if (agent) {
+        if (pageReady) {
+            showAgentViewport();
             render(session);
+        } else {
+            webView.setVisibility(View.VISIBLE);
+            terminalView.setAlpha(0f);
+            setAgentChrome(true);
+
+            webView.postDelayed(() -> {
+                if (!pageReady && isAgentSession(activity.getCurrentSession())) {
+                    showNativeTerminal();
+                }
+            }, 3500);
         }
     }
 
     public void onOutputChanged(TerminalSession session) {
+        if (!pageReady) return;
         if (!isAgentSession(session)) return;
         if (activity.getCurrentSession() != session) return;
         render(session);
@@ -108,6 +121,37 @@ public final class AiTerminalViewport {
         return "codex";
     }
 
+    private void showAgentViewport() {
+        webView.setVisibility(View.VISIBLE);
+        terminalView.setAlpha(0f);
+        terminalView.setImportantForAccessibility(
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        );
+        setAgentChrome(true);
+    }
+
+    private void showNativeTerminal() {
+        if (webView != null) webView.setVisibility(View.GONE);
+        if (terminalView != null) {
+            terminalView.setAlpha(1f);
+            terminalView.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            );
+        }
+        setAgentChrome(false);
+    }
+
+    private void setAgentChrome(boolean agent) {
+        if (nativeComposer != null) {
+            nativeComposer.setVisibility(agent ? View.GONE : View.VISIBLE);
+        }
+        if (terminalToolbar != null) {
+            terminalToolbar.setVisibility(agent
+                ? View.GONE
+                : terminalToolbarDefaultVisibility);
+        }
+    }
+
     private void render(TerminalSession session) {
         if (webView == null || session == null || !pageReady) return;
 
@@ -120,7 +164,10 @@ public final class AiTerminalViewport {
 
             JSONObject payload = new JSONObject();
             payload.put("provider", providerFor(session));
-            payload.put("sessionName", session.mSessionName == null ? "AI Session" : session.mSessionName);
+            payload.put(
+                "sessionName",
+                session.mSessionName == null ? "AI Session" : session.mSessionName
+            );
             payload.put("cwd", session.getCwd() == null ? "~" : session.getCwd());
             payload.put("transcript", transcript == null ? "" : transcript);
             payload.put("running", session.isRunning());
@@ -136,7 +183,7 @@ public final class AiTerminalViewport {
                 )
             );
         } catch (Exception ignored) {
-            // The fallback native terminal remains available if rendering fails.
+            activity.runOnUiThread(this::showNativeTerminal);
         }
     }
 
@@ -144,8 +191,12 @@ public final class AiTerminalViewport {
         @JavascriptInterface
         public void ready() {
             pageReady = true;
-            TerminalSession session = activity.getCurrentSession();
-            if (session != null) render(session);
+            activity.runOnUiThread(() -> {
+                TerminalSession session = activity.getCurrentSession();
+                if (session == null) return;
+                onSessionChanged(session);
+                render(session);
+            });
         }
 
         @JavascriptInterface
