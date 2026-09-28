@@ -49,8 +49,6 @@ install_host_runtime_packages() {
       fi
     fi
 
-    if false; then
-    fi
 
     warn "Mirror unavailable or out of sync. Trying another mirror..."
   done
