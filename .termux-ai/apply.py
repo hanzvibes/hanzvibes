@@ -79,6 +79,29 @@ def main() -> None:
         '    public static final String TERMUX_APP_NAME = "AI Workspace"; // Native app branding',
     )
 
+    # Replace all visible legacy app/service icon branding.
+    replace_once(
+        manifest,
+        '        android:banner="@drawable/banner"\n',
+        '',
+    )
+    replace_once(
+        manifest,
+        '        android:icon="@mipmap/ic_launcher"\n',
+        '        android:icon="@drawable/native_app_icon"\n',
+    )
+    replace_once(
+        manifest,
+        '        android:roundIcon="@mipmap/ic_launcher_round"\n',
+        '        android:roundIcon="@drawable/native_app_icon"\n',
+    )
+
+    replace_once(
+        service,
+        '        builder.setSmallIcon(R.drawable.ic_service_notification);',
+        '        builder.setSmallIcon(R.drawable.native_notification_icon);',
+    )
+
     # Native launcher is the only phone launcher. Legacy TermuxActivity stays internal.
     replace_once(
         manifest,
