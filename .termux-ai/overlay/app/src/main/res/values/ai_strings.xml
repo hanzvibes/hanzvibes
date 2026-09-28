@@ -24,4 +24,6 @@
     <string name="ai_claude_desc">Anthropic coding agent</string>
     <string name="ai_gemini_name">Gemini CLI</string>
     <string name="ai_gemini_desc">Google Gemini in your terminal</string>
+    <string name="ai_grok_name">Grok Build</string>
+    <string name="ai_grok_desc">SpaceXAI coding agent</string>
 </resources>
