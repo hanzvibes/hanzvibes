@@ -40,10 +40,16 @@ install_host_runtime_packages() {
     apt-get clean >/dev/null 2>&1 || true
     rm -f "$TERMUX_PREFIX/var/cache/apt/archives/"*.deb 2>/dev/null || true
 
-    if apt_workspace update -y >/dev/null 2>&1 && \
-       apt_workspace install -y proot-distro; then
-      say "Compatibility runtime ready."
-      return 0
+    if apt_workspace update -y >/dev/null 2>&1; then
+      dpkg --configure -a >/dev/null 2>&1 || true
+
+      if apt_workspace install -y proot-distro; then
+        say "Compatibility runtime ready."
+        return 0
+      fi
+    fi
+
+    if false; then
     fi
 
     warn "Mirror unavailable or out of sync. Trying another mirror..."
