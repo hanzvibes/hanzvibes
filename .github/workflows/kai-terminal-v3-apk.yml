@@ -44,7 +44,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           OUT="app/src/main/jniLibs/arm64-v8a"
           rm -rf "$OUT"
           mkdir -p "$OUT" /tmp/kai-ai/codex /tmp/kai-ai/opencode
@@ -70,7 +69,6 @@ jobs:
             '
 
           sudo chown -R "$(id -u):$(id -g)" "$OUT"
-
           patchelf --replace-needed libstdc++.so.6 libstdcpp.so "$OUT/libopencode.so"
           patchelf --replace-needed libgcc_s.so.1 libgcccompat.so "$OUT/libopencode.so"
           patchelf --replace-needed libgcc_s.so.1 libgcccompat.so "$OUT/libstdcpp.so"
@@ -79,22 +77,19 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           OUT="app/src/main/jniLibs/arm64-v8a"
           mkdir -p /tmp/kai-ai/agy
 
-          # Patched Antigravity engine for Android/Termux:
-          # VA39 address-space fixes + faccessat2 -> faccessat compatibility.
           curl -fL --retry 3             "https://github.com/wallentx/antigravity-cli-termux/releases/download/v1.2.12/antigravity-termux-standalone.tar.gz"             -o /tmp/agy-termux.tar.gz
           tar -xzf /tmp/agy-termux.tar.gz -C /tmp/kai-ai/agy agy.va39
           cp /tmp/kai-ai/agy/agy.va39 "$OUT/libagy.so"
 
-          # PRoot fork built specifically for modern Android / targetSdk 35.
-          # Both binaries must remain in nativeLibraryDir at runtime.
           curl -fL --retry 3             "https://raw.githubusercontent.com/oonid/pr/main/android/proot-engine/src/main/jniLibs/arm64-v8a/libproot.so"             -o "$OUT/libproot.so"
           curl -fL --retry 3             "https://raw.githubusercontent.com/oonid/pr/main/android/proot-engine/src/main/jniLibs/arm64-v8a/libproot-loader.so"             -o "$OUT/libproot-loader.so"
 
-          # Compact ARM64 glibc runtime for the patched Antigravity engine.
+          # Keep glibc's original SONAME/version relationships untouched.
+          # Android-valid filenames live in nativeLibraryDir. At runtime the app
+          # creates original-name symlinks that point back to these files.
           docker run --rm --platform linux/arm64             -v "$PWD/$OUT:/out"             debian:bookworm-slim bash -lc '
               set -eux
               apt-get update -qq
@@ -113,42 +108,16 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$OUT"
           chmod 755 "$OUT"/*.so
 
-          patch_needed() {
-            local file="$1"
-            patchelf --replace-needed libc.so.6 libagyc.so "$file" 2>/dev/null || true
-            patchelf --replace-needed libm.so.6 libagym.so "$file" 2>/dev/null || true
-            patchelf --replace-needed libpthread.so.0 libagypthread.so "$file" 2>/dev/null || true
-            patchelf --replace-needed libdl.so.2 libagydl.so "$file" 2>/dev/null || true
-            patchelf --replace-needed librt.so.1 libagyrt.so "$file" 2>/dev/null || true
-            patchelf --replace-needed libgcc_s.so.1 libagygcc.so "$file" 2>/dev/null || true
-            patchelf --replace-needed libstdc++.so.6 libagystdcpp.so "$file" 2>/dev/null || true
-          }
-
-          patch_needed "$OUT/libagy.so"
-          patch_needed "$OUT/libagyc.so"
-          patch_needed "$OUT/libagym.so"
-          patch_needed "$OUT/libagypthread.so"
-          patch_needed "$OUT/libagydl.so"
-          patch_needed "$OUT/libagyrt.so"
-          patch_needed "$OUT/libagygcc.so"
-          patch_needed "$OUT/libagystdcpp.so"
-
-          echo "Antigravity dependencies after patch:"
-          patchelf --print-needed "$OUT/libagy.so" || true
-
-          if patchelf --print-needed "$OUT/libagy.so" |             grep -E '^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libgcc_s\.so\.1|libstdc\+\+\.so\.6)$'; then
-            echo "ERROR: unpatched Antigravity dependency remains"
-            exit 1
-          fi
+          echo "Original Antigravity dependencies:"
+          readelf -d "$OUT/libagy.so" | grep NEEDED || true
 
       - name: Verify binary architecture
         shell: bash
         run: |
           set -euxo pipefail
-
           OUT="app/src/main/jniLibs/arm64-v8a"
-          file "$OUT"/*.so
 
+          file "$OUT"/*.so
           for f in "$OUT"/*.so; do
             readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
           done
@@ -160,17 +129,25 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           OUT="app/src/main/jniLibs/arm64-v8a"
 
-          # PRoot itself is Android/Bionic-specific and cannot be meaningfully
-          # executed inside an Alpine Docker container. Verify its ELF above.
-          # Here we execute all three AI engines directly under ARM64.
           docker run --rm --platform linux/arm64             -v "$PWD/$OUT:/ai:ro"             alpine:3.22 sh -lc '
               set -eux
+
               /ai/libcodex.so --version
               /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
-              /ai/libagyld.so --library-path /ai /ai/libagy.so --version
+
+              mkdir -p /tmp/agy-runtime
+              ln -s /ai/libagyld.so /tmp/agy-runtime/ld-linux-aarch64.so.1
+              ln -s /ai/libagyc.so /tmp/agy-runtime/libc.so.6
+              ln -s /ai/libagym.so /tmp/agy-runtime/libm.so.6
+              ln -s /ai/libagypthread.so /tmp/agy-runtime/libpthread.so.0
+              ln -s /ai/libagydl.so /tmp/agy-runtime/libdl.so.2
+              ln -s /ai/libagyrt.so /tmp/agy-runtime/librt.so.1
+              ln -s /ai/libagygcc.so /tmp/agy-runtime/libgcc_s.so.1
+              ln -s /ai/libagystdcpp.so /tmp/agy-runtime/libstdc++.so.6
+
+              /ai/libagyld.so                 --library-path /tmp/agy-runtime:/ai                 /ai/libagy.so --version
             '
 
       - name: Set up Gradle 8.9
