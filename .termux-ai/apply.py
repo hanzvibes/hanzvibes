@@ -38,10 +38,18 @@ def main() -> None:
 
     activity = repo / "app/src/main/java/com/termux/app/TermuxActivity.java"
     session_client = repo / "app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java"
+    app_build = repo / "app/build.gradle"
     strings = repo / "app/src/main/res/values/strings.xml"
     manifest = repo / "app/src/main/AndroidManifest.xml"
 
     replace_once(strings, '<!ENTITY TERMUX_APP_NAME "Termux">', '<!ENTITY TERMUX_APP_NAME "Termux AI">')
+
+    replace_once(
+        app_build,
+        '        implementation "androidx.drawerlayout:drawerlayout:1.2.0"\n',
+        '        implementation "androidx.drawerlayout:drawerlayout:1.2.0"\n'
+        '        implementation "androidx.webkit:webkit:1.12.1"\n',
+    )
 
     replace_once(
         activity,
@@ -287,7 +295,7 @@ def main() -> None:
         "            <!-- Phone launcher moved to AiHomeActivity. -->\n",
     )
 
-    print("Termux AI Workspace v4 brainless TerminalViewport patch applied successfully.")
+    print("Termux AI Workspace v4.2 appassets TerminalViewport patch applied successfully.")
     print("Base audited against upstream commit:", BASE_SHA)
     print("Next: ./gradlew assembleDebug")
 
