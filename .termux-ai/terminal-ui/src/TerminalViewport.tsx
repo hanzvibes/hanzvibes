@@ -52,7 +52,17 @@ function classify(line: string, provider: TerminalSnapshot["provider"]): LineEve
     return null;
   }
 
+  // Hide package-manager noise. The native PTY still receives every line,
+  // but the agent viewport should read like a coding app, not apt output.
+  if (/^(setting up |processing triggers|update-alternatives:|updating certificates|running hooks|0 added, 0 removed|done\.?$|selecting previously unselected package|preparing to unpack|unpacking |get:\d+ |fetched |reading package lists|building dependency tree|reading state information)/i.test(text)) {
+    return null;
+  }
+
   if (/^[~/$#]\s*$/.test(text)) return null;
+
+  if (/^\[Termux AI\]/i.test(text) || /^==>/.test(text) || /installed successfully/i.test(text) || /^start .* now\?/i.test(text)) {
+    return { kind: "working", text: "Preparing AI runtime…" };
+  }
 
   if (/^(❯|›)\s*/.test(text)) {
     return { kind: "user", text: text.replace(/^(❯|›)\s*/, "") };
@@ -87,6 +97,29 @@ function classify(line: string, provider: TerminalSnapshot["provider"]): LineEve
   }
 
   return { kind: "assistant", text };
+}
+
+function buildEvents(lines: string[], provider: TerminalSnapshot["provider"]) {
+  const events: LineEvent[] = [];
+
+  for (const line of lines) {
+    const next = classify(line, provider);
+    if (!next) continue;
+
+    const previous = events[events.length - 1];
+    if (
+      previous &&
+      previous.kind === "working" &&
+      next.kind === "working" &&
+      previous.text === next.text
+    ) {
+      continue;
+    }
+
+    events.push(next);
+  }
+
+  return events.slice(-MAX_EVENTS);
 }
 
 function usePromptSender() {
@@ -288,7 +321,7 @@ function GrokViewport({
 export function TerminalViewport({ snapshot }: { snapshot: TerminalSnapshot }) {
   const lines = React.useMemo(() => normalizeLines(snapshot.transcript), [snapshot.transcript]);
   const events = React.useMemo(
-    () => lines.map((line) => classify(line, snapshot.provider)).filter(Boolean) as LineEvent[],
+    () => buildEvents(lines, snapshot.provider),
     [lines, snapshot.provider],
   );
 
