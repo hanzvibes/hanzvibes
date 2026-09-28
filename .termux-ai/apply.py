@@ -59,6 +59,7 @@ def main() -> None:
         "import com.termux.app.api.file.FileReceiverActivity;\n"
         "import com.termux.app.ai.AiCliManager;\n"
         "import com.termux.app.ai.AiHomeActivity;\n"
+        "import com.termux.app.ai.AiTerminalViewport;\n"
         "import com.termux.app.ai.AiWorkspaceBranding;\n",
     )
 
@@ -67,7 +68,8 @@ def main() -> None:
         "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n",
         "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n\n"
         "    public static final String EXTRA_AI_COMMAND = \"com.termux.extra.AI_COMMAND\";\n"
-        "    public static final String EXTRA_AI_SESSION_NAME = \"com.termux.extra.AI_SESSION_NAME\";\n",
+        "    public static final String EXTRA_AI_SESSION_NAME = \"com.termux.extra.AI_SESSION_NAME\";\n"
+        "    private AiTerminalViewport mAiTerminalViewport;\n",
     )
 
     replace_once(
@@ -75,7 +77,8 @@ def main() -> None:
         "        setToggleKeyboardView();\n\n        registerForContextMenu(mTerminalView);",
         "        setToggleKeyboardView();\n\n"
         "        setAiHubButtonView();\n"
-        "        setWorkspaceChrome();\n\n"
+        "        setWorkspaceChrome();\n"
+        "        setAiTerminalViewport();\n\n"
         "        registerForContextMenu(mTerminalView);",
     )
 
@@ -190,6 +193,15 @@ def main() -> None:
         "        }\n"
         "        title.setText(label);\n"
         "    }\n\n"
+        "    private void setAiTerminalViewport() {\n"
+        "        mAiTerminalViewport = new AiTerminalViewport(this);\n"
+        "    }\n\n"
+        "    public void onTerminalViewportSessionChanged(TerminalSession session) {\n"
+        "        if (mAiTerminalViewport != null) mAiTerminalViewport.onSessionChanged(session);\n"
+        "    }\n\n"
+        "    public void onTerminalViewportOutputChanged(TerminalSession session) {\n"
+        "        if (mAiTerminalViewport != null) mAiTerminalViewport.onOutputChanged(session);\n"
+        "    }\n\n"
         "    public void launchCommandInNewSession(String command, String sessionName) {\n"
         "        if (mTermuxTerminalSessionActivityClient == null) return;\n"
         "        mTermuxTerminalSessionActivityClient.addNewSessionAndRun(command, sessionName);\n"
@@ -202,7 +214,17 @@ def main() -> None:
         "        checkAndScrollToSession(session);\n        updateBackgroundColor();",
         "        checkAndScrollToSession(session);\n"
         "        updateBackgroundColor();\n"
-        "        mActivity.updateWorkspaceSessionTitle();",
+        "        mActivity.updateWorkspaceSessionTitle();\n"
+        "        mActivity.onTerminalViewportSessionChanged(session);",
+    )
+
+    replace_once(
+        session_client,
+        "        if (mActivity.getCurrentSession() == changedSession) mActivity.getTerminalView().onScreenUpdated();",
+        "        if (mActivity.getCurrentSession() == changedSession) {\n"
+        "            mActivity.getTerminalView().onScreenUpdated();\n"
+        "            mActivity.onTerminalViewportOutputChanged(changedSession);\n"
+        "        }",
     )
 
     replace_once(
@@ -225,6 +247,18 @@ def main() -> None:
         "    <string name=\"title_ai_hub\">AI CLI Hub</string>\n"
         "    <string name=\"action_ai_update_all\">Update installed AI CLIs</string>\n"
         "    <string name=\"msg_ai_launcher_error\">Unable to prepare AI CLI launcher.</string>\n",
+    )
+
+    replace_once(
+        activity,
+        "        if (mIsInvalidState) return;\n\n"
+        "        if (mTermuxService != null) {",
+        "        if (mIsInvalidState) return;\n\n"
+        "        if (mAiTerminalViewport != null) {\n"
+        "            mAiTerminalViewport.destroy();\n"
+        "            mAiTerminalViewport = null;\n"
+        "        }\n\n"
+        "        if (mTermuxService != null) {",
     )
 
     replace_once(
@@ -253,7 +287,7 @@ def main() -> None:
         "            <!-- Phone launcher moved to AiHomeActivity. -->\n",
     )
 
-    print("Termux AI Workspace v3 desktop-inspired patch applied successfully.")
+    print("Termux AI Workspace v4 brainless TerminalViewport patch applied successfully.")
     print("Base audited against upstream commit:", BASE_SHA)
     print("Next: ./gradlew assembleDebug")
 
