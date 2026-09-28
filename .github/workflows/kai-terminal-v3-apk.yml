@@ -163,7 +163,7 @@ jobs:
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.1.0-AI.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.1.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.1.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libproot|libagyld)'
+          unzip -l dist/KaiTerminal-v3.1.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libproot|libproot-loader|libagyld)'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
