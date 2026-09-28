@@ -19,6 +19,7 @@ Commands:
   antigravity    Install if needed, then launch Google Antigravity CLI
   claude         Install if needed, then launch Claude Code
   gemini         Install if needed, then launch Gemini CLI
+  grok           Install if needed, then launch Grok Build
   update-all     Refresh all installed AI CLIs
   status         Show runtime + CLI status
 TXT
@@ -61,7 +62,7 @@ ensure_linux_base() {
   fi
 }
 
-path_env='export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; npm config set prefix "$HOME/.npm-global" >/dev/null 2>&1 || true'
+path_env='export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.grok/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; npm config set prefix "$HOME/.npm-global" >/dev/null 2>&1 || true'
 
 is_installed() {
   local cmd="$1"
@@ -94,6 +95,11 @@ install_gemini() {
   linux "$path_env; npm install -g @google/gemini-cli@latest"
 }
 
+install_grok() {
+  say "Installing/updating Grok Build..."
+  linux "$path_env; curl -fsSL https://x.ai/cli/install.sh | bash"
+}
+
 install_tool() {
   case "$1" in
     codex) install_codex ;;
@@ -101,6 +107,7 @@ install_tool() {
     agy) install_antigravity ;;
     claude) install_claude ;;
     gemini) install_gemini ;;
+    grok) install_grok ;;
     *) die "Unknown tool: $1" ;;
   esac
 }
@@ -129,6 +136,7 @@ update_all() {
   if is_installed agy; then install_antigravity; updated=1; fi
   if is_installed claude; then install_claude; updated=1; fi
   if is_installed gemini; then install_gemini; updated=1; fi
+  if is_installed grok; then install_grok; updated=1; fi
   if [[ "$updated" -eq 0 ]]; then
     warn "No AI CLI is installed yet. Open one from AI Hub to install it on demand."
   else
@@ -139,7 +147,7 @@ update_all() {
 status() {
   ensure_linux_base
   say "Compatibility runtime: Debian via proot-distro"
-  for pair in 'Codex:codex' 'OpenCode:opencode' 'Antigravity:agy' 'Claude:claude' 'Gemini:gemini'; do
+  for pair in 'Codex:codex' 'OpenCode:opencode' 'Antigravity:agy' 'Claude:claude' 'Gemini:gemini' 'Grok:grok'; do
     name="${pair%%:*}"
     cmd="${pair##*:}"
     if is_installed "$cmd"; then
@@ -157,6 +165,7 @@ case "${1:-}" in
   antigravity|agy) run_tool agy agy ;;
   claude) run_tool claude claude ;;
   gemini) run_tool gemini gemini ;;
+  grok) run_tool grok grok ;;
   update-all) update_all ;;
   status) status ;;
   help|-h|--help|'') usage ;;
