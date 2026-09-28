@@ -279,37 +279,7 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
             return;
         }
 
-        ensureBootstrap(() -> {
-            try {
-                File launcher = NativeRuntimeManager.prepare(this);
-                TermuxSession wrapper = service.createTermuxSession(
-                    null,
-                    null,
-                    null,
-                    TermuxConstants.TERMUX_HOME_DIR_PATH,
-                    false,
-                    label
-                );
-
-                if (wrapper == null) {
-                    showToast("Could not start " + label + ".");
-                    return;
-                }
-
-                TerminalSession terminal = wrapper.getTerminalSession();
-                openSession(terminal);
-                refreshSessions();
-
-                handler.postDelayed(
-                    () -> terminal.write(
-                        launcher.getAbsolutePath() + " " + action + "\r"
-                    ),
-                    350
-                );
-            } catch (Exception e) {
-                showToast("Could not prepare " + label + ".");
-            }
-        });
+        ensureBootstrap(() -> spawnManagedProcess(action, label));
     }
 
     private void createShellSession() {
@@ -339,27 +309,45 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
     }
 
     private void openRuntimeStatus() {
-        if (service == null) return;
-        ensureBootstrap(() -> {
-            try {
-                File launcher = NativeRuntimeManager.prepare(this);
-                TermuxSession wrapper = service.createTermuxSession(
-                    null, null, null,
-                    TermuxConstants.TERMUX_HOME_DIR_PATH,
-                    false,
-                    "Runtime status"
-                );
-                if (wrapper == null) return;
-                TerminalSession terminal = wrapper.getTerminalSession();
-                openSession(terminal);
-                handler.postDelayed(
-                    () -> terminal.write(launcher.getAbsolutePath() + " status\r"),
-                    300
-                );
-            } catch (Exception e) {
-                showToast("Could not inspect runtime.");
+        if (service == null) {
+            showToast("Runtime is still connecting.");
+            return;
+        }
+
+        ensureBootstrap(() -> spawnManagedProcess("status", "Runtime status"));
+    }
+
+    private void spawnManagedProcess(String action, String label) {
+        try {
+            File launcher = NativeRuntimeManager.prepare(this);
+            String bash = TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/bash";
+
+            TermuxSession wrapper = service.createTermuxSession(
+                bash,
+                new String[] { launcher.getAbsolutePath(), action },
+                null,
+                TermuxConstants.TERMUX_HOME_DIR_PATH,
+                false,
+                label
+            );
+
+            if (wrapper == null) {
+                showToast("Could not start " + label + ".");
+                return;
             }
-        });
+
+            TerminalSession terminal = wrapper.getTerminalSession();
+            openSession(terminal);
+            refreshSessions();
+
+            handler.postDelayed(() -> {
+                if (terminal == currentSession) {
+                    renderCurrentSession();
+                }
+            }, 1500);
+        } catch (Exception e) {
+            showToast("Could not prepare " + label + ".");
+        }
     }
 
     private void openSession(TerminalSession session) {
