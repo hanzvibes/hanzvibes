@@ -3,9 +3,9 @@ name: Build AI Workspace Native APK
 on:
   push:
     branches:
-      - 'termux-ai/v5-native-app'
+      - 'termux-ai/v5-4-structured-native'
     paths:
-      - '.termux-ai/TRIGGER_BUILD_V5'
+      - '.termux-ai/TRIGGER_BUILD_V5_4'
   workflow_dispatch:
 
 permissions:
@@ -42,13 +42,15 @@ jobs:
           test -f termux-src/app/src/main/java/com/termux/app/NativeAiActivity.java
           grep -q 'androidx.recyclerview:recyclerview' termux-src/app/build.gradle
           grep -q 'NativeAiActivity' termux-src/app/src/main/AndroidManifest.xml
+          test -f termux-src/app/src/main/assets/native-ai/opencode-native-driver
+          grep -q 'opencode run --format json' termux-src/app/src/main/assets/native-ai/opencode-native-driver
 
       - name: Build Android 7+ native APKs
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: ai-workspace-v5.3-native
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.5.3
+          TERMUX_APK_VERSION_TAG: ai-workspace-v5.4-structured-native
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.5.4
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -57,7 +59,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: ai-workspace-v5.3-native-apks
+          name: ai-workspace-v5.4-structured-native-apks
           if-no-files-found: error
           retention-days: 7
           path: |
