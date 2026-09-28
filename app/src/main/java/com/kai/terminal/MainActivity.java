@@ -13,6 +13,7 @@ import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.os.Bundle;
+import android.system.Os;
 import android.text.Editable;
 import android.text.Spannable;
 import android.text.SpannableString;
@@ -495,6 +496,8 @@ public class MainActivity extends Activity {
                         new File(getFilesDir(), "resolv.conf").getAbsolutePath());
                 pb.environment().put("KAI_CA_FILE",
                         new File(getFilesDir(), "kai-ca.pem").getAbsolutePath());
+                pb.environment().put("KAI_GLIBC_DIR",
+                        new File(getFilesDir(), "agy-runtime").getAbsolutePath());
                 pb.environment().put("PROOT_TMP_DIR", getCacheDir().getAbsolutePath());
                 pb.environment().put("PATH",
                         getApplicationInfo().nativeLibraryDir + ":/system/bin:/system/xbin");
@@ -606,7 +609,7 @@ public class MainActivity extends Activity {
                 .append(" -b \"$KAI_RESOLV_CONF:/etc/resolv.conf\" ")
                 .append(" -b /system/bin/sh:/bin/sh ")
                 .append(agyLoader)
-                .append(" --library-path ").append(libraryPath).append(" ")
+                .append(" --library-path \"$KAI_GLIBC_DIR\":").append(libraryPath).append(" ")
                 .append(agy).append(" \"$@\"; }\n");
 
         prelude.append(command);
@@ -650,6 +653,44 @@ public class MainActivity extends Activity {
     private synchronized void prepareNetworkRuntime() {
         writeResolverConfig();
         writeSystemCaBundle();
+        prepareGlibcRuntimeLinks();
+    }
+
+    private void prepareGlibcRuntimeLinks() {
+        File runtimeDir = new File(getFilesDir(), "agy-runtime");
+        if (!runtimeDir.exists() && !runtimeDir.mkdirs()) return;
+
+        String nativeDir = getApplicationInfo().nativeLibraryDir;
+        String[][] links = new String[][]{
+                {"ld-linux-aarch64.so.1", "libagyld.so"},
+                {"libc.so.6", "libagyc.so"},
+                {"libm.so.6", "libagym.so"},
+                {"libpthread.so.0", "libagypthread.so"},
+                {"libdl.so.2", "libagydl.so"},
+                {"librt.so.1", "libagyrt.so"},
+                {"libgcc_s.so.1", "libagygcc.so"},
+                {"libstdc++.so.6", "libagystdcpp.so"}
+        };
+
+        for (String[] entry : links) {
+            File link = new File(runtimeDir, entry[0]);
+            File target = new File(nativeDir, entry[1]);
+            if (!target.exists()) continue;
+
+            try {
+                if (link.exists() || android.system.Os.lstat(link.getAbsolutePath()) != null) {
+                    try {
+                        String existing = android.system.Os.readlink(link.getAbsolutePath());
+                        if (target.getAbsolutePath().equals(existing)) continue;
+                    } catch (Exception ignored) {}
+                    try { android.system.Os.unlink(link.getAbsolutePath()); } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+
+            try {
+                Os.symlink(target.getAbsolutePath(), link.getAbsolutePath());
+            } catch (Exception ignored) {}
+        }
     }
 
     private void writeResolverConfig() {
