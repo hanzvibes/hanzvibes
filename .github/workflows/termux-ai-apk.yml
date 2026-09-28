@@ -3,9 +3,9 @@ name: Build Termux AI APK
 on:
   push:
     branches:
-      - 'termux-ai/ui-v3-desktop'
+      - 'termux-ai/ui-v4-brainless'
     paths:
-      - '.termux-ai/TRIGGER_BUILD_V3'
+      - '.termux-ai/TRIGGER_BUILD_V4'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install brainless TerminalViewport components
+        working-directory: .termux-ai/terminal-ui
+        run: |
+          bun install
+          bunx --bun shadcn@latest add @brainless/claude-session @brainless/codex-session @brainless/grok-session --yes
+          bun run build
+
       - name: Fetch audited Termux source
         run: |
           git clone https://github.com/termux/termux-app.git termux-src
@@ -34,12 +46,19 @@ jobs:
       - name: Apply Termux AI rebuild
         run: python3 .termux-ai/apply.py termux-src
 
+      - name: Embed brainless TerminalViewport bundle
+        run: |
+          rm -rf termux-src/app/src/main/assets/terminal-ui
+          mkdir -p termux-src/app/src/main/assets/terminal-ui
+          cp -R .termux-ai/terminal-ui/dist/. termux-src/app/src/main/assets/terminal-ui/
+          test -f termux-src/app/src/main/assets/terminal-ui/index.html
+
       - name: Build Android 7+ APKs
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: termux-ai-v3-desktop
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.3
+          TERMUX_APK_VERSION_TAG: termux-ai-v4-brainless
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.4
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -48,7 +67,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: termux-ai-v3-desktop-apks
+          name: termux-ai-v4-brainless-apks
           if-no-files-found: error
           retention-days: 7
           path: |
