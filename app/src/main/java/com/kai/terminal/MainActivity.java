@@ -42,10 +42,19 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.io.FileWriter;
 import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,6 +65,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -107,6 +117,7 @@ public class MainActivity extends Activity {
     private Button runButton;
     private AlertDialog codexAuthDialog;
     private CountDownTimer codexAuthTimer;
+    private LocalConnectProxy codexProxy;
     private int activeIndex = 0;
     private int historyIndex = 0;
 
@@ -132,6 +143,8 @@ public class MainActivity extends Activity {
         boolean codexAuthWaitingShown;
         boolean codexAuthDialogShown;
         final StringBuilder codexAuthCapture = new StringBuilder();
+        String pendingCodexPrompt;
+        boolean codexBridgeLogin;
 
         TerminalSession(int id, String name, File currentDir) {
             this.id = id;
@@ -144,6 +157,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        codexProxy = new LocalConnectProxy();
+        codexProxy.start();
         prepareRuntimeFiles();
         loadHistory();
         restoreSessions();
@@ -165,7 +180,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v3.2.2 · AI", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3.3 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -368,6 +383,24 @@ public class MainActivity extends Activity {
             }
             writer.write("options timeout:2 attempts:2\n");
         } catch (Exception ignored) {}
+
+        File agyPrefix = new File(getFilesDir(), "agy-runtime");
+        File agyEtc = new File(agyPrefix, "etc");
+        File agyTls = new File(agyEtc, "tls");
+        agyTls.mkdirs();
+
+        File agyResolv = new File(agyEtc, "resolv.conf");
+        try (FileWriter writer = new FileWriter(agyResolv, false)) {
+            for (String server : servers) {
+                writer.write("nameserver " + server + "\n");
+            }
+            writer.write("options timeout:2 attempts:2\n");
+        } catch (Exception ignored) {}
+
+        File cert = new File(agyTls, "cert.pem");
+        if (!cert.exists() || cert.length() < 1000) {
+            copyAssetToFile("agy-ca.pem", cert);
+        }
     }
 
     private void loadHistory() {
@@ -424,8 +457,14 @@ public class MainActivity extends Activity {
         if (command.isEmpty()) return;
 
         if (session.running) {
-            sendToRunningProcess(session, command);
             input.setText("");
+            if (MODE_SHELL.equals(session.mode)) {
+                sendToRunningProcess(session, command);
+            } else {
+                append(session,
+                        "[agent masih berjalan · tunggu selesai atau tekan STOP sebelum mengirim prompt baru]\n",
+                        AMBER);
+            }
             return;
         }
 
@@ -547,7 +586,7 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 3.2.2\n" +
+                    "Kai Terminal 3.3.0\n" +
                     "AI-first Android terminal with persistent multi-session workspace.\n" +
                     "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
                     "Mode AI accepts plain text; prefix ! for shell commands. No root required.\n",
@@ -589,6 +628,20 @@ public class MainActivity extends Activity {
                         new File(getFilesDir(), "etc/resolv.conf").getAbsolutePath());
                 pb.environment().put("PATH",
                         getApplicationInfo().nativeLibraryDir + ":/system/bin:/system/xbin");
+                pb.environment().put("KAI_AGY_PREFIX",
+                        new File(getFilesDir(), "agy-runtime").getAbsolutePath());
+                pb.environment().put("KAI_AGY_CERT",
+                        new File(getFilesDir(), "agy-runtime/etc/tls/cert.pem").getAbsolutePath());
+
+                if (command.contains("codex") && codexProxy != null && codexProxy.isRunning()) {
+                    String proxyUrl = "http://127.0.0.1:" + codexProxy.getPort();
+                    pb.environment().put("HTTPS_PROXY", proxyUrl);
+                    pb.environment().put("HTTP_PROXY", proxyUrl);
+                    pb.environment().put("https_proxy", proxyUrl);
+                    pb.environment().put("http_proxy", proxyUrl);
+                    pb.environment().put("NO_PROXY", "127.0.0.1,localhost");
+                    pb.environment().put("no_proxy", "127.0.0.1,localhost");
+                }
 
                 Process process = pb.start();
                 session.currentProcess = process;
@@ -637,6 +690,7 @@ public class MainActivity extends Activity {
                     }
                     refreshAll();
                     persistState();
+                    handlePostProcess(session, command, code, cancelled);
                     if (activeSession() == session) input.requestFocus();
                 });
             }
@@ -691,13 +745,16 @@ public class MainActivity extends Activity {
         String codex = shellQuote(new File(nativeDir, "libcodex.so").getAbsolutePath());
         String opencode = shellQuote(new File(nativeDir, "libopencode.so").getAbsolutePath());
         String loader = shellQuote(new File(nativeDir, "libmusl-loader.so").getAbsolutePath());
-        String agy = shellQuote(new File(nativeDir, "libagy.so").getAbsolutePath());
+        String agyLoader = shellQuote(new File(nativeDir, "libagyld.so").getAbsolutePath());
+        String agyCore = shellQuote(new File(nativeDir, "libagycore.so").getAbsolutePath());
 
         return "codex() { " + codex + " \"$@\"; }\n" +
                 "opencode() { " + loader + " --library-path " + shellQuote(nativeDir) +
                 " " + opencode + " \"$@\"; }\n" +
-                "agy() { SSH_CONNECTION='kai-terminal 1 127.0.0.1 22' " +
-                "DBUS_SESSION_BUS_ADDRESS='unix:path=/dev/null' " + agy + " \"$@\"; }\n";
+                "agy() { PREFIX=\"$KAI_AGY_PREFIX\" GODEBUG=netdns=cgo " +
+                "SSL_CERT_FILE=\"$KAI_AGY_CERT\" DBUS_SESSION_BUS_ADDRESS='unix:path=/dev/null' " +
+                agyLoader + " --library-path " + shellQuote(nativeDir) + " " +
+                agyCore + " \"$@\"; }\n";
     }
 
     private String normalizeMode(String value) {
@@ -719,6 +776,32 @@ public class MainActivity extends Activity {
 
     private void setMode(TerminalSession session, String requested) {
         String mode = normalizeMode(requested);
+        if (mode.equals(session.mode)) return;
+        if (session.running) {
+            append(session,
+                    "\n[menutup proses " + modeLabel(session.mode) +
+                            " sebelum pindah ke " + modeLabel(mode) + "…]\n",
+                    AMBER);
+            cancelCommand(session);
+            waitForModeSwitch(session, mode, 0);
+            return;
+        }
+        applyMode(session, mode);
+    }
+
+    private void waitForModeSwitch(TerminalSession session, String mode, int attempt) {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!session.running) {
+                applyMode(session, mode);
+            } else if (attempt < 16) {
+                waitForModeSwitch(session, mode, attempt + 1);
+            } else {
+                append(session, "[gagal menutup proses lama · tekan STOP lalu coba lagi]\n", RED);
+            }
+        }, 220L);
+    }
+
+    private void applyMode(TerminalSession session, String mode) {
         session.mode = mode;
         append(session, "Mode → " + modeLabel(mode) + "\n", GREEN);
         refreshAll();
@@ -734,14 +817,7 @@ public class MainActivity extends Activity {
         refreshAll();
 
         if (MODE_CODEX.equals(mode)) {
-            resetCodexAuthState(session);
-            append(session,
-                    "Codex login\n" +
-                    "1. Tap URL yang muncul\n" +
-                    "2. Masukkan kode sekali pakai\n" +
-                    "3. Kembali ke Kai Terminal setelah berhasil\n\n",
-                    BLUE);
-            runShell(session, "codex login status >/dev/null 2>&1 || codex login --device-auth");
+            startCodexBridgeLogin(session, null);
             return;
         }
         if (MODE_OPENCODE.equals(mode)) {
@@ -764,12 +840,11 @@ public class MainActivity extends Activity {
 
         String q = shellQuote(prompt.trim());
         if (MODE_CODEX.equals(mode)) {
-            resetCodexAuthState(session);
-            runShell(session,
-                    "if ! codex login status >/dev/null 2>&1; then " +
-                    "echo '[Codex] login pertama kali diperlukan'; " +
-                    "codex login --device-auth || exit $?; fi; " +
-                    "codex exec " + q);
+            if (syncCodexAuthFromOpenCode(session, false) || hasCodexAuth()) {
+                runShell(session, "codex exec " + q);
+            } else {
+                startCodexBridgeLogin(session, prompt.trim());
+            }
             return;
         }
 
@@ -791,6 +866,115 @@ public class MainActivity extends Activity {
         }
 
         runShell(session, prompt);
+    }
+
+    private void startCodexBridgeLogin(TerminalSession session, String pendingPrompt) {
+        resetCodexAuthState(session);
+        session.pendingCodexPrompt = pendingPrompt;
+        session.codexBridgeLogin = true;
+        append(session,
+                "[Codex] memakai Android auth bridge supaya login stabil di HP.\n" +
+                "Device code dibuat lewat OpenCode, lalu credential disinkronkan ke Codex CLI.\n",
+                BLUE);
+        runShell(session,
+                "opencode auth login --provider openai --method " +
+                shellQuote("ChatGPT Pro/Plus (headless)") +
+                " && echo __KAI_CODEX_BRIDGE_OK__");
+    }
+
+    private void handlePostProcess(TerminalSession session, String command, int code, boolean cancelled) {
+        if (!session.codexBridgeLogin || !command.contains("__KAI_CODEX_BRIDGE_OK__")) return;
+        session.codexBridgeLogin = false;
+        if (cancelled || code != 0) {
+            session.pendingCodexPrompt = null;
+            append(session, "[Codex] login bridge belum selesai. Coba lagi saat koneksi stabil.\n", RED);
+            return;
+        }
+        boolean synced = syncCodexAuthFromOpenCode(session, true);
+        if (!synced) {
+            session.pendingCodexPrompt = null;
+            append(session, "[Codex] credential OpenCode belum bisa disinkronkan.\n", RED);
+            return;
+        }
+        finishCodexAuthUi(session);
+        append(session, "[Codex] connected via Android auth bridge.\n", GREEN);
+        String pending = session.pendingCodexPrompt;
+        session.pendingCodexPrompt = null;
+        if (pending != null && !pending.trim().isEmpty()) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> runAgentPrompt(session, MODE_CODEX, pending), 250L);
+        }
+    }
+
+    private boolean hasCodexAuth() {
+        File file = new File(getFilesDir(), ".codex/auth.json");
+        return file.isFile() && file.length() > 80;
+    }
+
+    private boolean syncCodexAuthFromOpenCode(TerminalSession session, boolean verbose) {
+        File[] candidates = new File[]{
+                new File(getFilesDir(), ".local/share/opencode/auth.json"),
+                new File(getFilesDir(), ".config/opencode/auth.json")
+        };
+        File source = null;
+        for (File candidate : candidates) {
+            if (candidate.isFile() && candidate.length() > 20) {
+                source = candidate;
+                break;
+            }
+        }
+        if (source == null) return false;
+        try {
+            String raw = new String(java.nio.file.Files.readAllBytes(source.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            JSONObject root = new JSONObject(raw);
+            JSONObject openai = root.optJSONObject("openai");
+            if (openai == null || !"oauth".equals(openai.optString("type"))) return false;
+            String access = openai.optString("access", "");
+            String refresh = openai.optString("refresh", "");
+            String accountId = openai.optString("accountId", "");
+            if (access.isEmpty() || refresh.isEmpty() || access.split("\\.").length != 3) return false;
+
+            JSONObject tokens = new JSONObject();
+            tokens.put("id_token", access);
+            tokens.put("access_token", access);
+            tokens.put("refresh_token", refresh);
+            if (!accountId.isEmpty()) tokens.put("account_id", accountId);
+
+            JSONObject codex = new JSONObject();
+            codex.put("auth_mode", "chatgpt");
+            codex.put("tokens", tokens);
+            codex.put("last_refresh", java.time.Instant.now().toString());
+
+            File dir = new File(getFilesDir(), ".codex");
+            if (!dir.exists() && !dir.mkdirs()) return false;
+            File target = new File(dir, "auth.json");
+            try (FileWriter writer = new FileWriter(target, false)) {
+                writer.write(codex.toString());
+            }
+            target.setReadable(false, false);
+            target.setReadable(true, true);
+            target.setWritable(false, false);
+            target.setWritable(true, true);
+            if (verbose) append(session, "[Codex] ChatGPT credential synced inside app sandbox.\n", GREEN);
+            return true;
+        } catch (Exception e) {
+            if (verbose) append(session, "[Codex bridge] " + e.getMessage() + "\n", RED);
+            return false;
+        }
+    }
+
+    private void copyAssetToFile(String assetName, File target) {
+        try {
+            File parent = target.getParentFile();
+            if (parent != null) parent.mkdirs();
+            try (InputStream in = getAssets().open(assetName);
+                 FileOutputStream out = new FileOutputStream(target, false)) {
+                byte[] buffer = new byte[8192];
+                int n;
+                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            }
+        } catch (Exception ignored) {}
     }
 
     private void showAiSetup(TerminalSession session) {
@@ -816,7 +1000,13 @@ public class MainActivity extends Activity {
     }
 
     private void runAiDoctor(TerminalSession session) {
-        append(session, "AI Doctor · real runtime verification\n", GREEN);
+        append(session, "AI Doctor · Android runtime verification\n", GREEN);
+        append(session,
+                "  Codex proxy: " + (codexProxy != null && codexProxy.isRunning() ? "READY" : "DOWN") + "\n",
+                codexProxy != null && codexProxy.isRunning() ? GREEN : RED);
+        append(session,
+                "  Codex auth: " + (hasCodexAuth() ? "READY" : "NOT CONNECTED") + "\n",
+                hasCodexAuth() ? GREEN : AMBER);
         runShell(session,
                 "printf 'Codex: '; codex --version\n" +
                 "printf 'OpenCode: '; opencode --version\n" +
@@ -834,6 +1024,7 @@ public class MainActivity extends Activity {
     private String cleanProcessChunk(TerminalSession session, String value) {
         String cleaned = stripAnsi(value);
         if (cleaned.isEmpty()) return "";
+        cleaned = cleaned.replace("__KAI_CODEX_BRIDGE_OK__", "");
 
         captureCodexDeviceAuth(session, cleaned);
         if (cleaned.contains("Successfully logged in")) {
@@ -1126,7 +1317,7 @@ public class MainActivity extends Activity {
     }
 
     private void showHelp(TerminalSession session) {
-        append(session, "Kai Terminal v3.2.2 built-ins\n", GREEN);
+        append(session, "Kai Terminal v3.3 built-ins\n", GREEN);
         append(session, "  ai                cara pakai mode AI\n", TEXT);
         append(session, "  ai setup          bantuan login pertama\n", TEXT);
         append(session, "  use codex         pindah ke mode Codex\n", TEXT);
@@ -1498,7 +1689,7 @@ public class MainActivity extends Activity {
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 3.2.2\n", GREEN);
+        appendRaw(session, "Kai Terminal 3.3.0\n", GREEN);
         appendRaw(session, "AI-first Android terminal · ARM64 edition\n", MUTED);
         appendRaw(session, "Tap CODEX / OPEN / AGY, lalu langsung ketik pesan\n", BLUE);
         appendRaw(session, "Shell tetap ada via mode SHELL atau prefix !\n\n", MUTED);
@@ -1639,9 +1830,119 @@ public class MainActivity extends Activity {
         super.onPause();
     }
 
+    private static final class LocalConnectProxy {
+        private final ExecutorService pool = Executors.newCachedThreadPool();
+        private final AtomicBoolean running = new AtomicBoolean(false);
+        private ServerSocket server;
+
+        void start() {
+            if (running.get()) return;
+            try {
+                server = new ServerSocket();
+                server.setReuseAddress(true);
+                server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 32);
+                running.set(true);
+                pool.execute(() -> {
+                    while (running.get()) {
+                        try {
+                            Socket client = server.accept();
+                            pool.execute(() -> handle(client));
+                        } catch (Exception ignored) {}
+                    }
+                });
+            } catch (Exception ignored) {
+                running.set(false);
+            }
+        }
+
+        boolean isRunning() {
+            return running.get() && server != null && !server.isClosed();
+        }
+
+        int getPort() {
+            return server == null ? -1 : server.getLocalPort();
+        }
+
+        private void handle(Socket client) {
+            Socket remote = null;
+            try {
+                client.setSoTimeout(20000);
+                BufferedInputStream in = new BufferedInputStream(client.getInputStream());
+                BufferedOutputStream out = new BufferedOutputStream(client.getOutputStream());
+                byte[] headerBytes = readHeader(in);
+                if (headerBytes == null) return;
+                String header = new String(headerBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+                String first = header.split("\\r?\\n", 2)[0];
+                String[] parts = first.split(" ");
+                if (parts.length < 2 || !"CONNECT".equalsIgnoreCase(parts[0])) {
+                    out.write(("HTTP/1.1 501 Not Implemented\\r\\nConnection: close\\r\\n\\r\\n")
+                            .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    out.flush();
+                    return;
+                }
+                String authority = parts[1];
+                int colon = authority.lastIndexOf(':');
+                String host = colon > 0 ? authority.substring(0, colon) : authority;
+                int port = colon > 0 ? Integer.parseInt(authority.substring(colon + 1)) : 443;
+                remote = new Socket();
+                remote.connect(new InetSocketAddress(host, port), 15000);
+                remote.setSoTimeout(0);
+                out.write(("HTTP/1.1 200 Connection Established\\r\\n" +
+                        "Proxy-Agent: KaiTerminal/3.3\\r\\n\\r\\n")
+                        .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                out.flush();
+                Socket finalRemote = remote;
+                Thread upstream = new Thread(() -> pipe(in, finalRemote), "kai-proxy-up");
+                upstream.setDaemon(true);
+                upstream.start();
+                pipe(new BufferedInputStream(remote.getInputStream()), client);
+                try { upstream.join(1000); } catch (InterruptedException ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                try { client.close(); } catch (Exception ignored) {}
+                if (remote != null) try { remote.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        private static byte[] readHeader(BufferedInputStream in) throws Exception {
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            int matched = 0;
+            while (buf.size() < 32768) {
+                int b = in.read();
+                if (b < 0) break;
+                buf.write(b);
+                if ((matched == 0 || matched == 2) && b == '\r') matched++;
+                else if ((matched == 1 || matched == 3) && b == '\n') matched++;
+                else matched = b == '\r' ? 1 : 0;
+                if (matched == 4) return buf.toByteArray();
+            }
+            return null;
+        }
+
+        private static void pipe(InputStream in, Socket outSocket) {
+            try {
+                OutputStream out = outSocket.getOutputStream();
+                byte[] buffer = new byte[16384];
+                int n;
+                while ((n = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, n);
+                    out.flush();
+                }
+            } catch (Exception ignored) {}
+            try { outSocket.shutdownOutput(); } catch (Exception ignored) {}
+        }
+
+        void close() {
+            running.set(false);
+            if (server != null) try { server.close(); } catch (Exception ignored) {}
+            pool.shutdownNow();
+        }
+    }
+
     @Override
     protected void onDestroy() {
         dismissCodexAuthDialog();
+        if (codexProxy != null) codexProxy.close();
         for (TerminalSession session : sessions) {
             Process process = session.currentProcess;
             if (process != null) {
