@@ -34,7 +34,7 @@ jobs:
         working-directory: .termux-ai/terminal-ui
         run: |
           bun install
-          bunx --bun shadcn@latest add @brainless/claude-session @brainless/codex-session @brainless/grok-session --yes
+          bunx --bun shadcn@latest add @brainless/claude-session @brainless/codex-session @brainless/grok-session @brainless/grok-thinking @brainless/grok-working --yes
           bun run build
 
       - name: Fetch audited Termux source
