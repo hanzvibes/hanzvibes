@@ -47,8 +47,8 @@ jobs:
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: ai-workspace-v5.2-native
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.5.2
+          TERMUX_APK_VERSION_TAG: ai-workspace-v5.3-native
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.5.3
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -57,7 +57,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: ai-workspace-v5.2-native-apks
+          name: ai-workspace-v5.3-native-apks
           if-no-files-found: error
           retention-days: 7
           path: |
