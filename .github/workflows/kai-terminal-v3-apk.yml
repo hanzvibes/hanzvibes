@@ -25,7 +25,12 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Download official ARM64 musl AI CLIs
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Download official ARM64 AI CLIs
         shell: bash
         run: |
           set -euxo pipefail
@@ -49,6 +54,14 @@ jobs:
           test -n "$AGY"
           cp "$AGY" app/src/main/jniLibs/arm64-v8a/libagy.so
 
+          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
+              set -eux
+              apk add --no-cache libstdc++
+              cp -L /lib/ld-musl-aarch64.so.1 /out/libmusl-loader.so
+              cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
+              cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
+            '
+
           chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
           file app/src/main/jniLibs/arm64-v8a/*.so
           du -h app/src/main/jniLibs/arm64-v8a/*.so
@@ -61,20 +74,16 @@ jobs:
             readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
           done
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Smoke test CLI binaries under ARM64 emulation
+      - name: Strict smoke test all three CLIs under ARM64
         shell: bash
         run: |
           set -euxo pipefail
-          docker run --rm --platform linux/arm64 -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro" alpine:3.22 sh -lc '
-            /ai/libcodex.so --version
-            /ai/libopencode.so --version
-            /ai/libagy.so --version
-          '
+          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
+              set -eux
+              /ai/libcodex.so --version
+              LD_PRELOAD=/ai/libstdcpp.so:/ai/libgcccompat.so /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
+              /ai/libagy.so --version
+            '
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -91,11 +100,11 @@ jobs:
           sha256sum dist/KaiTerminal-v3.0.0-AI.apk
           ls -lh dist/KaiTerminal-v3.0.0-AI.apk
 
-      - name: Verify APK signature and package
+      - name: Verify APK signature package and bundled runtimes
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.0.0-AI.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.0.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.0.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy)'
+          unzip -l dist/KaiTerminal-v3.0.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
