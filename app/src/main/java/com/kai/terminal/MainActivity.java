@@ -114,6 +114,7 @@ public class MainActivity extends Activity {
         volatile OutputStream stdin;
         volatile boolean running;
         volatile boolean cancelRequested;
+        boolean codexAuthWaitingShown;
 
         TerminalSession(int id, String name, File currentDir) {
             this.id = id;
@@ -147,7 +148,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v3.2 · AI", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3.2.1 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -529,7 +530,7 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 3.2.0\n" +
+                    "Kai Terminal 3.2.1\n" +
                     "AI-first Android terminal with persistent multi-session workspace.\n" +
                     "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
                     "Mode AI accepts plain text; prefix ! for shell commands. No root required.\n",
@@ -591,7 +592,7 @@ public class MainActivity extends Activity {
                 byte[] readBuffer = new byte[2048];
                 int read;
                 while ((read = process.getInputStream().read(readBuffer)) != -1) {
-                    final String chunk = stripAnsi(new String(
+                    final String chunk = cleanProcessChunk(session, new String(
                             readBuffer, 0, read, java.nio.charset.StandardCharsets.UTF_8));
                     if (!chunk.isEmpty()) {
                         runOnUiThread(() -> append(session, chunk, TEXT));
@@ -715,7 +716,13 @@ public class MainActivity extends Activity {
         refreshAll();
 
         if (MODE_CODEX.equals(mode)) {
-            append(session, "Codex login · buka link/kode yang muncul.\n", BLUE);
+            session.codexAuthWaitingShown = false;
+            append(session,
+                    "Codex login\n" +
+                    "1. Tap URL yang muncul\n" +
+                    "2. Masukkan kode sekali pakai\n" +
+                    "3. Kembali ke Kai Terminal setelah berhasil\n\n",
+                    BLUE);
             runShell(session, "codex login status >/dev/null 2>&1 || codex login --device-auth");
             return;
         }
@@ -739,6 +746,7 @@ public class MainActivity extends Activity {
 
         String q = shellQuote(prompt.trim());
         if (MODE_CODEX.equals(mode)) {
+            session.codexAuthWaitingShown = false;
             runShell(session,
                     "if ! codex login status >/dev/null 2>&1; then " +
                     "echo '[Codex] login pertama kali diperlukan'; " +
@@ -802,8 +810,40 @@ public class MainActivity extends Activity {
         if (value == null) return "";
         return value
                 .replaceAll("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "")
-                .replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "")
-                .replace("\r", "\n");
+                .replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "");
+    }
+
+    private String cleanProcessChunk(TerminalSession session, String value) {
+        String cleaned = stripAnsi(value);
+        if (cleaned.isEmpty()) return "";
+
+        // CLI spinners commonly redraw one line with carriage returns. Turning every
+        // redraw into a newline floods the terminal and hides important login URLs/codes.
+        String[] redraws = cleaned.split("\\r", -1);
+        StringBuilder out = new StringBuilder();
+
+        for (String redraw : redraws) {
+            if (redraw.isEmpty()) continue;
+
+            if (redraw.contains("Waiting for authorization")) {
+                if (!session.codexAuthWaitingShown) {
+                    session.codexAuthWaitingShown = true;
+                    out.append("Waiting for authorization…\n");
+                    out.append("Selesaikan login di browser memakai URL + kode di atas.\n");
+                }
+                continue;
+            }
+
+            // Ignore pure spinner frames while preserving normal command output.
+            String trimmed = redraw.trim();
+            if (trimmed.matches("^[\\u2800-\\u28FF\\-\\\\|/\\. ]*$")) {
+                continue;
+            }
+
+            out.append(redraw);
+        }
+
+        return out.toString();
     }
 
     private void changeDirectory(TerminalSession session, String command) {
@@ -1238,7 +1278,7 @@ public class MainActivity extends Activity {
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 3.2.0\n", GREEN);
+        appendRaw(session, "Kai Terminal 3.2.1\n", GREEN);
         appendRaw(session, "AI-first Android terminal · ARM64 edition\n", MUTED);
         appendRaw(session, "Tap CODEX / OPEN / AGY, lalu langsung ketik pesan\n", BLUE);
         appendRaw(session, "Shell tetap ada via mode SHELL atau prefix !\n\n", MUTED);
