@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AiToolCard">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">76dp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:foreground">?attr/selectableItemBackground</item>
+        <item name="cardBackgroundColor">#15181E</item>
+        <item name="cardCornerRadius">20dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeColor">#242832</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+</resources>
