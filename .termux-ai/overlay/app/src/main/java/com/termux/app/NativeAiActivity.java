@@ -603,10 +603,32 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
     }
 
     private String compactPath(String path) {
-        if (path == null || path.trim().isEmpty()) return "~";
+        if (path == null || path.trim().isEmpty()) return "Local workspace";
+
         String home = TermuxConstants.TERMUX_HOME_DIR_PATH;
-        if (path.equals(home)) return "~";
-        if (path.startsWith(home + "/")) return "~/" + path.substring(home.length() + 1);
+        if (path.equals(home)) return "Local workspace";
+        if (path.startsWith(home + "/")) {
+            String relative = path.substring(home.length() + 1);
+            if (relative.startsWith(".ai-workspace")) return "Local workspace";
+            return "~/" + relative;
+        }
+
+        String normalized = path.replace("\\", "/");
+        int rootfs = normalized.indexOf("/containers/debian/rootfs");
+        if (rootfs >= 0) {
+            String relative = normalized.substring(
+                rootfs + "/containers/debian/rootfs".length()
+            );
+            if (relative.isEmpty() || "/".equals(relative)) {
+                return "Local workspace";
+            }
+            if (relative.startsWith("/root")) {
+                String rest = relative.substring("/root".length());
+                return rest.isEmpty() ? "~" : "~" + rest;
+            }
+            return relative;
+        }
+
         return path;
     }
 
