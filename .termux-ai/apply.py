@@ -7,14 +7,29 @@ from pathlib import Path
 
 BASE_SHA = "8629e632fcb95da272221be327db653fb24befe9"
 
+SKIP_PREFIXES = (
+    "app/src/main/java/com/termux/app/ai/",
+    "app/src/main/assets/termux-ai/",
+    "app/src/main/res/layout/activity_ai_home.xml",
+    "app/src/main/res/layout/activity_termux.xml",
+    "app/src/main/res/layout/item_ai_tool_",
+    "app/src/main/res/values/ai_strings.xml",
+    "app/src/main/res/values/ai_styles.xml",
+)
+
 
 def replace_once(path: Path, old: str, new: str) -> None:
     text = path.read_text(encoding="utf-8")
-    if new and new in text:
+    if new in text:
         return
     if old not in text:
-        raise SystemExit(f"Patch anchor not found in {path}: {old[:90]!r}")
+        raise SystemExit(f"Patch anchor not found in {path}: {old[:100]!r}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def should_skip(rel: Path) -> bool:
+    value = rel.as_posix()
+    return any(value.startswith(prefix) for prefix in SKIP_PREFIXES)
 
 
 def main() -> None:
@@ -32,272 +47,161 @@ def main() -> None:
         if src.is_dir():
             continue
         rel = src.relative_to(overlay)
+        if should_skip(rel):
+            continue
         dst = repo / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
-    activity = repo / "app/src/main/java/com/termux/app/TermuxActivity.java"
-    session_client = repo / "app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java"
     app_build = repo / "app/build.gradle"
     strings = repo / "app/src/main/res/values/strings.xml"
     manifest = repo / "app/src/main/AndroidManifest.xml"
+    service = repo / "app/src/main/java/com/termux/app/TermuxService.java"
+    constants = repo / "termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java"
 
-    replace_once(strings, '<!ENTITY TERMUX_APP_NAME "Termux">', '<!ENTITY TERMUX_APP_NAME "Termux AI">')
-
+    # Native UI dependency.
     replace_once(
         app_build,
-        '        implementation "androidx.drawerlayout:drawerlayout:1.2.0"\n',
-        '        implementation "androidx.drawerlayout:drawerlayout:1.2.0"\n'
-        '        implementation "androidx.webkit:webkit:1.12.1"\n',
+        '        implementation "androidx.preference:preference:1.2.1"\n',
+        '        implementation "androidx.preference:preference:1.2.1"\n'
+        '        implementation "androidx.recyclerview:recyclerview:1.3.2"\n',
     )
 
-    replace_once(
-        activity,
-        "import android.content.IntentFilter;\n",
-        "import android.content.IntentFilter;\nimport android.graphics.Color;\n",
-    )
-    replace_once(
-        activity,
-        "import android.widget.RelativeLayout;\n",
-        "import android.widget.RelativeLayout;\nimport android.widget.TextView;\n",
-    )
-    replace_once(
-        activity,
-        "import com.termux.app.api.file.FileReceiverActivity;\n",
-        "import com.termux.app.api.file.FileReceiverActivity;\n"
-        "import com.termux.app.ai.AiCliManager;\n"
-        "import com.termux.app.ai.AiHomeActivity;\n"
-        "import com.termux.app.ai.AiTerminalViewport;\n"
-        "import com.termux.app.ai.AiWorkspaceBranding;\n",
-    )
-
-    replace_once(
-        activity,
-        "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n",
-        "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n\n"
-        "    public static final String EXTRA_AI_COMMAND = \"com.termux.extra.AI_COMMAND\";\n"
-        "    public static final String EXTRA_AI_SESSION_NAME = \"com.termux.extra.AI_SESSION_NAME\";\n"
-        "    private AiTerminalViewport mAiTerminalViewport;\n",
-    )
-
-    replace_once(
-        activity,
-        "        setToggleKeyboardView();\n\n        registerForContextMenu(mTerminalView);",
-        "        setToggleKeyboardView();\n\n"
-        "        setAiHubButtonView();\n"
-        "        setWorkspaceChrome();\n"
-        "        setAiTerminalViewport();\n\n"
-        "        registerForContextMenu(mTerminalView);",
-    )
-
-    replace_once(
-        activity,
-        "    @Override\n    public void onStart() {",
-        "    @Override\n"
-        "    protected void onNewIntent(Intent intent) {\n"
-        "        super.onNewIntent(intent);\n"
-        "        if (intent == null) return;\n"
-        "        String aiCommand = intent.getStringExtra(EXTRA_AI_COMMAND);\n"
-        "        if (aiCommand != null && mTermuxTerminalSessionActivityClient != null && mTermuxService != null) {\n"
-        "            String sessionName = intent.getStringExtra(EXTRA_AI_SESSION_NAME);\n"
-        "            mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, sessionName);\n"
-        "        } else {\n"
-        "            setIntent(intent);\n"
-        "        }\n"
-        "    }\n\n"
-        "    @Override\n"
-        "    public void onStart() {",
-    )
-
-    replace_once(
-        activity,
-        "        final Intent intent = getIntent();\n        setIntent(null);\n",
-        "        AiWorkspaceBranding.applyMotdIfDefault();\n"
-        "        final Intent intent = getIntent();\n"
-        "        setIntent(null);\n"
-        "        final String aiCommand = intent == null ? null : intent.getStringExtra(EXTRA_AI_COMMAND);\n"
-        "        final String aiSessionName = intent == null ? null : intent.getStringExtra(EXTRA_AI_SESSION_NAME);\n",
-    )
-
-    replace_once(
-        activity,
-        "                        boolean launchFailsafe = false;\n"
-        "                        if (intent != null && intent.getExtras() != null) {\n"
-        "                            launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);\n"
-        "                        }\n"
-        "                        mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);",
-        "                        AiWorkspaceBranding.applyMotdIfDefault();\n"
-        "                        if (aiCommand != null) {\n"
-        "                            mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, aiSessionName);\n"
-        "                        } else {\n"
-        "                            boolean launchFailsafe = false;\n"
-        "                            if (intent != null && intent.getExtras() != null) {\n"
-        "                                launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);\n"
-        "                            }\n"
-        "                            mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);\n"
-        "                        }",
-    )
-
-    replace_once(
-        activity,
-        "            if (!mIsActivityRecreated && intent != null && Intent.ACTION_RUN.equals(intent.getAction())) {",
-        "            if (aiCommand != null) {\n"
-        "                mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, aiSessionName);\n"
-        "            } else if (!mIsActivityRecreated && intent != null && Intent.ACTION_RUN.equals(intent.getAction())) {",
-    )
-
-    replace_once(
-        activity,
-        "    private void setNewSessionButtonView() {",
-        "    private void setAiHubButtonView() {\n"
-        "        View aiHubButton = findViewById(R.id.ai_hub_button);\n"
-        "        if (aiHubButton != null) {\n"
-        "            aiHubButton.setOnClickListener(v -> {\n"
-        "                getDrawer().closeDrawers();\n"
-        "                AiCliManager.showHub(this);\n"
-        "            });\n"
-        "        }\n"
-        "    }\n\n"
-        "    private void setWorkspaceChrome() {\n"
-        "        getWindow().setStatusBarColor(Color.rgb(13, 15, 18));\n"
-        "        getWindow().setNavigationBarColor(Color.rgb(13, 15, 18));\n\n"
-        "        View homeButton = findViewById(R.id.workspace_home_button);\n"
-        "        if (homeButton != null) homeButton.setOnClickListener(v -> {\n"
-        "            startActivity(new Intent(this, AiHomeActivity.class));\n"
-        "            finish();\n"
-        "        });\n\n"
-        "        View drawerButton = findViewById(R.id.session_drawer_button);\n"
-        "        if (drawerButton != null) drawerButton.setOnClickListener(v -> getDrawer().openDrawer(Gravity.LEFT));\n\n"
-        "        EditText commandInput = findViewById(R.id.command_input);\n"
-        "        View sendButton = findViewById(R.id.send_command_button);\n"
-        "        if (sendButton != null) sendButton.setOnClickListener(v -> sendComposerCommand());\n"
-        "        if (commandInput != null) commandInput.setOnEditorActionListener((v, actionId, event) -> {\n"
-        "            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {\n"
-        "                sendComposerCommand();\n"
-        "                return true;\n"
-        "            }\n"
-        "            return false;\n"
-        "        });\n"
-        "        updateWorkspaceSessionTitle();\n"
-        "    }\n\n"
-        "    private void sendComposerCommand() {\n"
-        "        EditText input = findViewById(R.id.command_input);\n"
-        "        if (input == null || mTerminalView == null) return;\n"
-        "        String command = input.getText().toString();\n"
-        "        if (command.trim().isEmpty()) return;\n"
-        "        TerminalSession session = mTerminalView.getCurrentSession();\n"
-        "        if (session == null) return;\n"
-        "        session.write(command + \"\\r\");\n"
-        "        input.setText(\"\");\n"
-        "        mTerminalView.requestFocus();\n"
-        "    }\n\n"
-        "    public void updateWorkspaceSessionTitle() {\n"
-        "        TextView title = findViewById(R.id.workspace_session_title);\n"
-        "        if (title == null || mTerminalView == null) return;\n"
-        "        TerminalSession session = mTerminalView.getCurrentSession();\n"
-        "        String label = \"Terminal\";\n"
-        "        if (session != null && session.mSessionName != null && !session.mSessionName.trim().isEmpty()) {\n"
-        "            label = session.mSessionName;\n"
-        "        }\n"
-        "        title.setText(label);\n"
-        "    }\n\n"
-        "    private void setAiTerminalViewport() {\n"
-        "        mAiTerminalViewport = new AiTerminalViewport(this);\n"
-        "    }\n\n"
-        "    public void onTerminalViewportSessionChanged(TerminalSession session) {\n"
-        "        if (mAiTerminalViewport != null) mAiTerminalViewport.onSessionChanged(session);\n"
-        "    }\n\n"
-        "    public void onTerminalViewportOutputChanged(TerminalSession session) {\n"
-        "        if (mAiTerminalViewport != null) mAiTerminalViewport.onOutputChanged(session);\n"
-        "    }\n\n"
-        "    public void launchCommandInNewSession(String command, String sessionName) {\n"
-        "        if (mTermuxTerminalSessionActivityClient == null) return;\n"
-        "        mTermuxTerminalSessionActivityClient.addNewSessionAndRun(command, sessionName);\n"
-        "    }\n\n"
-        "    private void setNewSessionButtonView() {",
-    )
-
-    replace_once(
-        session_client,
-        "        checkAndScrollToSession(session);\n        updateBackgroundColor();",
-        "        checkAndScrollToSession(session);\n"
-        "        updateBackgroundColor();\n"
-        "        mActivity.updateWorkspaceSessionTitle();\n"
-        "        mActivity.onTerminalViewportSessionChanged(session);",
-    )
-
-    replace_once(
-        session_client,
-        "        if (mActivity.getCurrentSession() == changedSession) mActivity.getTerminalView().onScreenUpdated();",
-        "        if (mActivity.getCurrentSession() == changedSession) {\n"
-        "            mActivity.getTerminalView().onScreenUpdated();\n"
-        "            mActivity.onTerminalViewportOutputChanged(changedSession);\n"
-        "        }",
-    )
-
-    replace_once(
-        session_client,
-        "    public void setCurrentStoredSession() {",
-        "    public void addNewSessionAndRun(String command, String sessionName) {\n"
-        "        addNewSession(false, sessionName);\n"
-        "        final TerminalSession session = mActivity.getCurrentSession();\n"
-        "        if (session == null) return;\n"
-        "        mActivity.getTerminalView().postDelayed(() -> session.write(command + \"\\r\"), 250);\n"
-        "    }\n\n"
-        "    public void setCurrentStoredSession() {",
-    )
-
+    # User-facing branding. Package/runtime paths stay compatible internally.
     replace_once(
         strings,
-        "    <string name=\"action_toggle_soft_keyboard\">Keyboard</string>\n",
-        "    <string name=\"action_toggle_soft_keyboard\">Keyboard</string>\n"
-        "    <string name=\"action_ai_hub\">AI Hub</string>\n"
-        "    <string name=\"title_ai_hub\">AI CLI Hub</string>\n"
-        "    <string name=\"action_ai_update_all\">Update installed AI CLIs</string>\n"
-        "    <string name=\"msg_ai_launcher_error\">Unable to prepare AI CLI launcher.</string>\n",
+        '<!ENTITY TERMUX_APP_NAME "Termux">',
+        '<!ENTITY TERMUX_APP_NAME "AI Workspace">',
+    )
+    replace_once(
+        constants,
+        '    public static final String TERMUX_APP_NAME = "Termux"; // Default: "Termux"',
+        '    public static final String TERMUX_APP_NAME = "AI Workspace"; // Native app branding',
     )
 
+    # Native launcher is the only phone launcher. Legacy TermuxActivity stays internal.
     replace_once(
-        activity,
-        "        if (mIsInvalidState) return;\n\n"
-        "        if (mTermuxService != null) {",
-        "        if (mIsInvalidState) return;\n\n"
-        "        if (mAiTerminalViewport != null) {\n"
-        "            mAiTerminalViewport.destroy();\n"
-        "            mAiTerminalViewport = null;\n"
-        "        }\n\n"
-        "        if (mTermuxService != null) {",
+        manifest,
+        '        <activity\n            android:name=".app.TermuxActivity"',
+        '        <activity\n'
+        '            android:name=".app.NativeAiActivity"\n'
+        '            android:exported="true"\n'
+        '            android:label="@string/application_name"\n'
+        '            android:launchMode="singleTask"\n'
+        '            android:resizeableActivity="true"\n'
+        '            android:theme="@style/Theme.TermuxApp.DayNight.NoActionBar">\n'
+        '            <intent-filter>\n'
+        '                <action android:name="android.intent.action.MAIN" />\n'
+        '                <category android:name="android.intent.category.LAUNCHER" />\n'
+        '            </intent-filter>\n'
+        '            <intent-filter>\n'
+        '                <action android:name="android.intent.action.MAIN" />\n'
+        '                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />\n'
+        '            </intent-filter>\n'
+        '        </activity>\n\n'
+        '        <activity\n'
+        '            android:name=".app.TermuxActivity"',
     )
 
     replace_once(
         manifest,
-        "        <activity\n            android:name=\".app.TermuxActivity\"",
-        "        <activity\n"
-        "            android:name=\".app.ai.AiHomeActivity\"\n"
-        "            android:exported=\"true\"\n"
-        "            android:label=\"@string/application_name\"\n"
-        "            android:theme=\"@style/Theme.TermuxApp.DayNight.NoActionBar\">\n"
-        "            <intent-filter>\n"
-        "                <action android:name=\"android.intent.action.MAIN\" />\n"
-        "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
-        "            </intent-filter>\n"
-        "        </activity>\n\n"
-        "        <activity\n"
-        "            android:name=\".app.TermuxActivity\"",
+        '            <intent-filter>\n'
+        '                <action android:name="android.intent.action.MAIN" />\n\n'
+        '                <category android:name="android.intent.category.LAUNCHER" />\n'
+        '            </intent-filter>\n'
+        '            <intent-filter>\n'
+        '                <action android:name="android.intent.action.MAIN" />\n\n'
+        '                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />\n'
+        '            </intent-filter>\n\n',
+        '            <!-- Launcher moved to NativeAiActivity. -->\n\n',
     )
 
     replace_once(
         manifest,
-        "            <intent-filter>\n"
-        "                <action android:name=\"android.intent.action.MAIN\" />\n\n"
-        "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
-        "            </intent-filter>\n",
-        "            <!-- Phone launcher moved to AiHomeActivity. -->\n",
+        '            android:targetActivity=".app.TermuxActivity">',
+        '            android:targetActivity=".app.NativeAiActivity">',
     )
 
-    print("Termux AI Workspace v4.2 appassets TerminalViewport patch applied successfully.")
+    # Service can hand terminal callbacks to the native workspace without TermuxActivity.
+    replace_once(
+        service,
+        '    private TermuxTerminalSessionActivityClient mTermuxTerminalSessionActivityClient;\n',
+        '    private TermuxTerminalSessionActivityClient mTermuxTerminalSessionActivityClient;\n'
+        '    private TermuxTerminalSessionClientBase mNativeTerminalSessionClient;\n',
+    )
+
+    replace_once(
+        service,
+        '        if (mTermuxTerminalSessionActivityClient != null)\n'
+        '            unsetTermuxTerminalSessionClient();\n'
+        '        return false;',
+        '        if (mTermuxTerminalSessionActivityClient != null)\n'
+        '            unsetTermuxTerminalSessionClient();\n'
+        '        if (mNativeTerminalSessionClient != null)\n'
+        '            unsetNativeTerminalSessionClient();\n'
+        '        return false;',
+    )
+
+    replace_once(
+        service,
+        '    public synchronized TermuxTerminalSessionClientBase getTermuxTerminalSessionClient() {\n'
+        '        if (mTermuxTerminalSessionActivityClient != null)\n'
+        '            return mTermuxTerminalSessionActivityClient;\n'
+        '        else\n'
+        '            return mTermuxTerminalSessionServiceClient;\n'
+        '    }',
+        '    public synchronized TermuxTerminalSessionClientBase getTermuxTerminalSessionClient() {\n'
+        '        if (mNativeTerminalSessionClient != null)\n'
+        '            return mNativeTerminalSessionClient;\n'
+        '        if (mTermuxTerminalSessionActivityClient != null)\n'
+        '            return mTermuxTerminalSessionActivityClient;\n'
+        '        return mTermuxTerminalSessionServiceClient;\n'
+        '    }',
+    )
+
+    insert_anchor = (
+        '    /** This should be called when {@link TermuxActivity#onServiceConnected} is called to set the\n'
+    )
+    native_methods = (
+        '    public synchronized void setNativeTerminalSessionClient(TermuxTerminalSessionClientBase client) {\n'
+        '        mNativeTerminalSessionClient = client;\n'
+        '        for (int i = 0; i < mShellManager.mTermuxSessions.size(); i++)\n'
+        '            mShellManager.mTermuxSessions.get(i).getTerminalSession().updateTerminalSessionClient(client);\n'
+        '    }\n\n'
+        '    public synchronized void unsetNativeTerminalSessionClient() {\n'
+        '        TermuxTerminalSessionClientBase fallback = mTermuxTerminalSessionActivityClient != null\n'
+        '            ? mTermuxTerminalSessionActivityClient\n'
+        '            : mTermuxTerminalSessionServiceClient;\n'
+        '        for (int i = 0; i < mShellManager.mTermuxSessions.size(); i++)\n'
+        '            mShellManager.mTermuxSessions.get(i).getTerminalSession().updateTerminalSessionClient(fallback);\n'
+        '        mNativeTerminalSessionClient = null;\n'
+        '    }\n\n'
+    )
+    service_text = service.read_text(encoding="utf-8")
+    if "setNativeTerminalSessionClient" not in service_text:
+        if insert_anchor not in service_text:
+            raise SystemExit("Native service method insertion anchor not found")
+        service.write_text(
+            service_text.replace(insert_anchor, native_methods + insert_anchor, 1),
+            encoding="utf-8",
+        )
+
+    # Notifications and plugin-triggered foreground opens go to the native app.
+    replace_once(
+        service,
+        '        Intent notificationIntent = TermuxActivity.newInstance(this);',
+        '        Intent notificationIntent = NativeAiActivity.newInstance(this);',
+    )
+    replace_once(
+        service,
+        '            TermuxActivity.startTermuxActivity(this);',
+        '            startActivity(NativeAiActivity.newInstance(this));',
+    )
+
+    print("AI Workspace v5 native Android patch applied successfully.")
     print("Base audited against upstream commit:", BASE_SHA)
-    print("Next: ./gradlew assembleDebug")
+    print("UI: NativeAiActivity + RecyclerView agent renderer")
+    print("WebView/React TerminalViewport: not included in APK")
 
 
 if __name__ == "__main__":
