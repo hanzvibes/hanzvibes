@@ -46,6 +46,13 @@ public final class NativeTranscriptParser {
             return limit(parseStructuredOpenCode(transcript));
         }
 
+        if (
+            !"shell".equals(provider) &&
+            transcript.toLowerCase(Locale.ROOT).contains("[workspace]")
+        ) {
+            return limit(parseBootstrapRuntime(transcript, provider, session));
+        }
+
         return limit(parseLegacyTerminal(transcript, provider, session));
     }
 
@@ -220,6 +227,119 @@ public final class NativeTranscriptParser {
                 NativeMessage.Type.STATUS,
                 "",
                 "OpenCode is ready."
+            ));
+        }
+
+        return out;
+    }
+
+    private static List<NativeMessage> parseBootstrapRuntime(
+        String transcript,
+        String provider,
+        TerminalSession session
+    ) {
+        String status = "Preparing local coding runtime…";
+        String error = "";
+        String[] lines = transcript.replace("\r", "").split("\n");
+
+        for (String raw : lines) {
+            String line = clean(raw);
+            if (line.isEmpty()) continue;
+
+            String lower = line.toLowerCase(Locale.ROOT);
+
+            if (lower.contains("checking package mirror:")) {
+                status = "Checking package mirror…";
+                continue;
+            }
+
+            if (
+                lower.contains("mirror unavailable or out of sync") ||
+                lower.contains("file has unexpected size") ||
+                lower.contains("mirror sync in progress") ||
+                lower.contains("unable to fetch some archives")
+            ) {
+                status = "Package mirror unavailable. Switching mirror…";
+                continue;
+            }
+
+            if (lower.contains("compatibility runtime ready")) {
+                status = "Compatibility runtime ready.";
+                continue;
+            }
+
+            if (lower.contains("installing local linux environment")) {
+                status = "Installing local Linux environment…";
+                continue;
+            }
+
+            if (lower.contains("installing runtime dependencies")) {
+                status = "Installing runtime dependencies…";
+                continue;
+            }
+
+            if (lower.contains("installing opencode")) {
+                status = "Installing OpenCode…";
+                continue;
+            }
+
+            if (lower.contains("installing openai codex")) {
+                status = "Installing Codex…";
+                continue;
+            }
+
+            if (lower.contains("installing claude code")) {
+                status = "Installing Claude Code…";
+                continue;
+            }
+
+            if (lower.contains("installing gemini cli")) {
+                status = "Installing Gemini CLI…";
+                continue;
+            }
+
+            if (lower.contains("installing grok build")) {
+                status = "Installing Grok Build…";
+                continue;
+            }
+
+            if (lower.contains("installing antigravity")) {
+                status = "Installing Antigravity…";
+                continue;
+            }
+
+            if (lower.contains("starting structured opencode session")) {
+                status = "Starting OpenCode…";
+                continue;
+            }
+
+            if (
+                lower.contains("could not install compatibility runtime") ||
+                lower.contains("local runtime is not ready")
+            ) {
+                error = line.replaceAll("^.*\\[Workspace\\]\\s*", "").trim();
+            }
+        }
+
+        List<NativeMessage> out = new ArrayList<>();
+        out.add(new NativeMessage(
+            error.isEmpty()
+                ? NativeMessage.Type.STATUS
+                : NativeMessage.Type.ERROR,
+            error.isEmpty() ? "" : "RUNTIME",
+            error.isEmpty() ? status : error
+        ));
+
+        if (
+            error.isEmpty() &&
+            session.getPid() > 0 &&
+            !session.isRunning()
+        ) {
+            out.clear();
+            out.add(new NativeMessage(
+                NativeMessage.Type.ERROR,
+                "RUNTIME",
+                "Runtime setup stopped before the agent could start."
             ));
         }
 
