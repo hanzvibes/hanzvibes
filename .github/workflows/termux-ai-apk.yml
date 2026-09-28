@@ -1,11 +1,11 @@
-name: Build Termux AI APK
+name: Build AI Workspace Native APK
 
 on:
   push:
     branches:
-      - 'termux-ai/ui-v4-3-root-mount-fix'
+      - 'termux-ai/v5-native-app'
     paths:
-      - '.termux-ai/TRIGGER_BUILD_V4_3'
+      - '.termux-ai/TRIGGER_BUILD_V5'
   workflow_dispatch:
 
 permissions:
@@ -15,8 +15,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     steps:
-      - name: Checkout build kit
+      - name: Checkout native rebuild kit
         uses: actions/checkout@v6
 
       - name: Setup Java 17
@@ -25,43 +26,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install brainless TerminalViewport components
-        working-directory: .termux-ai/terminal-ui
-        run: |
-          bun install
-          bunx --bun shadcn@latest add @brainless/claude-session @brainless/codex-session @brainless/grok-session @brainless/grok-thinking @brainless/grok-working --yes
-          bun run build
-          python3 inline_dist.py
-          test ! -d dist/assets
-          python3 -c "from pathlib import Path; s=Path('dist/index.html').read_text(); root=s.find('<div id=\\\"root\\\"></div>'); script=s.rfind('<script>'); assert root >= 0 and script > root, (root, script); assert 'TermuxNative' in s and 'createRoot' in s; print('Verified React mount order:', root, script)"
-
-      - name: Fetch audited Termux source
+      - name: Fetch audited runtime source
         run: |
           git clone https://github.com/termux/termux-app.git termux-src
           cd termux-src
           git checkout 8629e632fcb95da272221be327db653fb24befe9
 
-      - name: Apply Termux AI rebuild
+      - name: Apply native AI Workspace rebuild
         run: python3 .termux-ai/apply.py termux-src
 
-      - name: Embed brainless TerminalViewport bundle
+      - name: Assert no WebView terminal UI is bundled
         run: |
-          rm -rf termux-src/app/src/main/assets/terminal-ui
-          mkdir -p termux-src/app/src/main/assets/terminal-ui
-          cp -R .termux-ai/terminal-ui/dist/. termux-src/app/src/main/assets/terminal-ui/
-          test -f termux-src/app/src/main/assets/terminal-ui/index.html
+          test ! -e termux-src/app/src/main/assets/terminal-ui
+          test ! -e termux-src/app/src/main/java/com/termux/app/ai/AiTerminalViewport.java
+          test -f termux-src/app/src/main/java/com/termux/app/NativeAiActivity.java
+          grep -q 'androidx.recyclerview:recyclerview' termux-src/app/build.gradle
+          grep -q 'NativeAiActivity' termux-src/app/src/main/AndroidManifest.xml
 
-      - name: Build Android 7+ APKs
+      - name: Build Android 7+ native APKs
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: termux-ai-v4.3-brainless
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.4.3
+          TERMUX_APK_VERSION_TAG: ai-workspace-v5-native
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.5.0
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -70,7 +57,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: termux-ai-v4-3-brainless-apks
+          name: ai-workspace-v5-native-apks
           if-no-files-found: error
           retention-days: 7
           path: |
