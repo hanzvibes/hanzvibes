@@ -565,8 +565,19 @@ public class MainActivity extends Activity {
             String name = mapping[0];
             if (trimmed.equals(name) || trimmed.startsWith(name + " ")) {
                 String suffix = trimmed.substring(name.length());
-                return shellQuote(new File(getApplicationInfo().nativeLibraryDir,
-                        mapping[1]).getAbsolutePath()) + suffix;
+                String nativeDir = getApplicationInfo().nativeLibraryDir;
+                String binary = new File(nativeDir, mapping[1]).getAbsolutePath();
+
+                if (name.equals("opencode")) {
+                    String loader = new File(nativeDir, "libmusl-loader.so").getAbsolutePath();
+                    String stdcpp = new File(nativeDir, "libstdcpp.so").getAbsolutePath();
+                    String gcc = new File(nativeDir, "libgcccompat.so").getAbsolutePath();
+                    return "LD_PRELOAD=" + shellQuote(stdcpp + ":" + gcc) + " " +
+                            shellQuote(loader) + " --library-path " + shellQuote(nativeDir) +
+                            " " + shellQuote(binary) + suffix;
+                }
+
+                return shellQuote(binary) + suffix;
             }
         }
         return command;
