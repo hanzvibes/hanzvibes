@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -u
+
+# This driver deliberately never opens OpenCode's TUI.
+# It keeps one logical native conversation alive and emits:
+#   - our own user/ready markers
+#   - OpenCode's newline-delimited JSON events
+#
+# Android renders those events directly as native views.
+
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# PTY echo would otherwise mirror the user's prompt back into the transcript.
+stty -echo 2>/dev/null || true
+
+session_id=""
+
+printf '%s\n' '@@NATIVE_READY@@opencode'
+
+while IFS= read -r prompt; do
+  # Native composer submits one turn per line.
+  [ -z "$prompt" ] && continue
+
+  prompt_b64="$(printf '%s' "$prompt" | base64 | tr -d '\n')"
+  printf '%s%s\n' '@@NATIVE_USER_B64@@' "$prompt_b64"
+
+  if [ -n "$session_id" ]; then
+    cmd=(opencode run --format json --thinking --auto --session "$session_id" "$prompt")
+  else
+    cmd=(opencode run --format json --thinking --auto "$prompt")
+  fi
+
+  # Stream JSON events straight through while remembering the durable session id.
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+
+    if [ -z "$session_id" ]; then
+      maybe="$(printf '%s\n' "$line" | sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' | head -n 1)"
+      if [ -n "$maybe" ]; then
+        session_id="$maybe"
+      fi
+    fi
+  done < <("${cmd[@]}" 2>&1)
+
+  printf '%s\n' '@@NATIVE_TURN_END@@'
+done
