@@ -34,130 +34,21 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Download and patch official ARM64 AI CLIs
+      - name: Build bundled AI runtimes
         shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p app/src/main/jniLibs/arm64-v8a /tmp/kai-ai/codex /tmp/kai-ai/opencode /tmp/kai-ai/agy
+        run: bash tools/build_v33_runtimes.sh
 
-          curl -fL --retry 3 https://github.com/openai/codex/releases/download/rust-v0.158.0/codex-aarch64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz
-          tar -xzf /tmp/codex.tar.gz -C /tmp/kai-ai/codex
-          CODEX="$(find /tmp/kai-ai/codex -type f -name 'codex*' | head -1)"
-          test -n "$CODEX"
-          cp "$CODEX" app/src/main/jniLibs/arm64-v8a/libcodex.so
-
-          curl -fL --retry 3 https://github.com/anomalyco/opencode/releases/download/v1.18.33/opencode-linux-arm64-musl.tar.gz -o /tmp/opencode.tar.gz
-          tar -xzf /tmp/opencode.tar.gz -C /tmp/kai-ai/opencode
-          OPENCODE="$(find /tmp/kai-ai/opencode -type f -name 'opencode' | head -1)"
-          test -n "$OPENCODE"
-          cp "$OPENCODE" app/src/main/jniLibs/arm64-v8a/libopencode.so
-
-          # Android-ready Antigravity standalone VA39 core.
-          curl -fL --retry 3 https://github.com/wallentx/antigravity-cli-termux/releases/download/v1.2.12/antigravity-termux-standalone.tar.gz -o /tmp/agy-standalone.tar.gz
-          echo "88484f703ead95c3246496847269848413375aa20a7d758be6ac438b289d67f0  /tmp/agy-standalone.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/agy-standalone.tar.gz -C /tmp/kai-ai/agy
-          test -s /tmp/kai-ai/agy/agy.va39
-          cp /tmp/kai-ai/agy/agy.va39 app/src/main/jniLibs/arm64-v8a/libagycore.so
-
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-aarch64-linux-gnu make patchelf xz-utils
-          GLIBC_BASE=https://packages-cf.termux.dev/apt/termux-glibc
-          curl -fL --retry 3 "$GLIBC_BASE/dists/glibc/stable/binary-aarch64/Packages" -o /tmp/glibc-Packages
-          grep -Fq "Package: glibc" /tmp/glibc-Packages
-          GLIBC_FILE="$(awk 'BEGIN{p=0} /^Package: glibc$/{p=1} p && /^Filename: /{print $2; exit}' /tmp/glibc-Packages)"
-          test -n "$GLIBC_FILE"
-          curl -fL --retry 3 "$GLIBC_BASE/$GLIBC_FILE" -o /tmp/termux-glibc.deb
-          rm -rf /tmp/termux-glibc && mkdir -p /tmp/termux-glibc
-          dpkg-deb -x /tmp/termux-glibc.deb /tmp/termux-glibc
-          GLIBC_DIR="$(find /tmp/termux-glibc -type d -path '*/glibc/lib' | head -1)"
-          test -n "$GLIBC_DIR"
-
-          python3 tools/package_agy_glibc.py "$GLIBC_DIR" app/src/main/jniLibs/arm64-v8a
-
-          mkdir -p app/src/main/assets
-          cp /etc/ssl/certs/ca-certificates.crt app/src/main/assets/agy-ca.pem
-
-          # Build musl with Kai Terminal's Android-owned resolver path.
-          curl -fL --retry 3 https://musl.libc.org/releases/musl-1.2.5.tar.gz -o /tmp/musl.tar.gz
-          echo "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  /tmp/musl.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/musl.tar.gz -C /tmp
-          sed -i 's|"/etc/resolv.conf"|"/data/data/com.kai.terminal/files/etc/resolv.conf"|' /tmp/musl-1.2.5/src/network/resolvconf.c
-          grep -Fq '/data/data/com.kai.terminal/files/etc/resolv.conf' /tmp/musl-1.2.5/src/network/resolvconf.c
-          (cd /tmp/musl-1.2.5 && CC=aarch64-linux-gnu-gcc ./configure)
-          make -C /tmp/musl-1.2.5 CC=aarch64-linux-gnu-gcc -j2
-          cp /tmp/musl-1.2.5/lib/libc.so app/src/main/jniLibs/arm64-v8a/libmusl-loader.so
-
-          # Bundle OpenCode's C++ runtime.
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
-              set -eux
-              apk add --no-cache libstdc++
-              cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
-              cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
-            '
-          sudo chown -R "$(id -u):$(id -g)" app/src/main/jniLibs/arm64-v8a
-
-          # Android APK native libraries need .so names; rewrite OpenCode SONAME dependencies.
-          patchelf --replace-needed libstdc++.so.6 libstdcpp.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libstdcpp.so
-
-          chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
-          file app/src/main/jniLibs/arm64-v8a/*.so
-
-      - name: Verify ARM64 binaries and patch
+      - name: Verify bundled runtime structure
         shell: bash
-        run: |
-          set -euxo pipefail
-          for f in app/src/main/jniLibs/arm64-v8a/*.so; do
-            readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
-          done
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libstdcpp.so
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libgcccompat.so
-          test -x app/src/main/jniLibs/arm64-v8a/libagyld.so
-          test -x app/src/main/jniLibs/arm64-v8a/libagycore.so
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libagycore.so | grep -E '^libagyrt_'
+        run: bash tools/verify_v33_runtimes.sh
 
-      - name: Strict runtime smoke test
+      - name: Strict ARM64 runtime smoke test
         shell: bash
-        run: |
-          set -euxo pipefail
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro" \
-            alpine:3.22 sh -lc '
-              set -eux
-              /ai/libcodex.so --version
-              /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
-              PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so --version
-              PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so --help >/dev/null
-            '
+        run: bash tools/smoke_v33_runtimes.sh
 
       - name: Verify V3.3 Android regression guards
         shell: bash
-        run: |
-          set -euxo pipefail
-          SRC=app/src/main/java/com/kai/terminal/MainActivity.java
-          grep -F 'ChatGPT Pro/Plus (headless)' "$SRC"
-          grep -F 'codex login --device-auth' "$SRC"
-          grep -F 'modeRow' "$SRC"
-          grep -F 'byte[] readBuffer = new byte[2048]' "$SRC"
-          grep -F 'command.startsWith("!")' "$SRC"
-          grep -F 'Ask " + modeLabel(session.mode)' "$SRC"
-          grep -F 'cleanProcessChunk(session' "$SRC"
-          grep -F 'codexAuthWaitingShown' "$SRC"
-          grep -F 'Selesaikan login di browser memakai URL + kode di atas.' "$SRC"
-          grep -F 'showCodexDeviceDialog(session, url, code)' "$SRC"
-          grep -F 'CODEX_DEVICE_CODE_TTL_MS' "$SRC"
-          grep -F 'RETRY LOGIN' "$SRC"
-          grep -F 'Device code copied. Tap OPEN LOGIN.' "$SRC"
-          grep -F 'LocalConnectProxy' "$SRC"
-          grep -F '__KAI_CODEX_BRIDGE_OK__' "$SRC"
-          grep -F 'syncCodexAuthFromOpenCode' "$SRC"
-          grep -F 'agent masih berjalan' "$SRC"
-          grep -F 'libagyld.so' "$SRC"
-          grep -F 'libagycore.so' "$SRC"
-
-          python3 -c 'import re; s="https://auth.openai.com/codex/device\n2UCS8C403"; u=re.search(r"https://[^\s]+/codex/device",s); c=re.search(r"\b(?=[A-Z0-9-]{9,10}\b)(?=[A-Z0-9-]*\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\b",s); assert u and u.group()=="https://auth.openai.com/codex/device"; assert c and c.group()=="2UCS8C403"; print("Codex device prompt parser fixture: PASS")'
+        run: bash tools/check_v33_source.sh
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -168,6 +59,7 @@ jobs:
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK
+        shell: bash
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.3.0-AI.apk
@@ -175,58 +67,19 @@ jobs:
           ls -lh dist/KaiTerminal-v3.3.0-AI.apk
 
       - name: Verify final APK
+        shell: bash
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.3.0-AI.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.3.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagycore|libagyld|libagyrt_|libmusl-loader|libstdcpp|libgcccompat)'
+          unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libmusl-loader|libstdcpp|libgcccompat|libagycore|libagyld|libagyrt_)'
 
-      - name: Smoke test packaged APK binaries and multiline wrapper
+      - name: Smoke test packaged APK runtimes
         shell: bash
-        run: |
-          set -euxo pipefail
-          rm -rf /tmp/kai-apk-smoke
-          mkdir -p /tmp/kai-apk-smoke
-          unzip -q dist/KaiTerminal-v3.3.0-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
-          chmod 755 /tmp/kai-apk-smoke/lib/arm64-v8a/*.so
-
-          docker run --rm --platform linux/arm64             -v "/tmp/kai-apk-smoke/lib/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
-              set -eux
-              codex() { /ai/libcodex.so "$@"; }
-              opencode() { /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so "$@"; }
-              agy() { PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so "$@"; }
-
-              echo "== direct startup =="
-              codex --version
-              opencode --version
-              agy --version
-
-              echo "== auth/help entrypoints =="
-              codex login --help >/dev/null
-              opencode auth --help >/dev/null
-              opencode auth login --help > /tmp/opencode-auth-login-help.txt 2>&1
-              grep -F -- '--method' /tmp/opencode-auth-login-help.txt
-              agy --help >/dev/null
-
-              echo "== multiline paste regression =="
-              sh -ec '"'"'
-                codex() { /ai/libcodex.so "$@"; }
-                opencode() { /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so "$@"; }
-                agy() { PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so "$@"; }
-                codex --version
-                opencode --version
-                agy --version
-              '"'"'
-
-              echo "== ai doctor equivalent =="
-              printf "Codex: "; codex --version
-              printf "OpenCode: "; opencode --version
-              printf "Antigravity: "; agy --version
-            '
+        run: bash tools/smoke_packaged_v33.sh dist/KaiTerminal-v3.3.0-AI.apk
 
       - name: Validate APK archive integrity
         shell: bash
         run: |
-          set -euxo pipefail
           unzip -t dist/KaiTerminal-v3.3.0-AI.apk >/tmp/apk-integrity.txt
           grep -F 'No errors detected in compressed data' /tmp/apk-integrity.txt
 
@@ -247,191 +100,8 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/KaiTerminal-v3.3.0-AI.apk --clobber
           else
-            gh release create "$TAG"               dist/KaiTerminal-v3.3.0-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.3.0"               --notes "Android ARM64 build. Adds Codex Android network proxy + OpenCode auth bridge, safe AI mode switching, and a standalone VA39/glibc Antigravity runtime. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
-          fi
- /tmp/glibc-Packages
-          GLIBC_FILE="$(awk 'BEGIN{p=0} /^Package: glibc$/{p=1} p && /^Filename: /{print $2; exit}' /tmp/glibc-Packages)"
-          test -n "$GLIBC_FILE"
-          curl -fL --retry 3 "$GLIBC_BASE/$GLIBC_FILE" -o /tmp/termux-glibc.deb
-          rm -rf /tmp/termux-glibc && mkdir -p /tmp/termux-glibc
-          dpkg-deb -x /tmp/termux-glibc.deb /tmp/termux-glibc
-          GLIBC_DIR="$(find /tmp/termux-glibc -type d -path '*/glibc/lib' | head -1)"
-          test -n "$GLIBC_DIR"
-
-          python3 tools/package_agy_glibc.py "$GLIBC_DIR" app/src/main/jniLibs/arm64-v8a
-
-          mkdir -p app/src/main/assets
-          cp /etc/ssl/certs/ca-certificates.crt app/src/main/assets/agy-ca.pem
-
-          # Build musl with Kai Terminal's Android-owned resolver path.
-          curl -fL --retry 3 https://musl.libc.org/releases/musl-1.2.5.tar.gz -o /tmp/musl.tar.gz
-          echo "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  /tmp/musl.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/musl.tar.gz -C /tmp
-          sed -i 's|"/etc/resolv.conf"|"/data/data/com.kai.terminal/files/etc/resolv.conf"|' /tmp/musl-1.2.5/src/network/resolvconf.c
-          grep -Fq '/data/data/com.kai.terminal/files/etc/resolv.conf' /tmp/musl-1.2.5/src/network/resolvconf.c
-          (cd /tmp/musl-1.2.5 && CC=aarch64-linux-gnu-gcc ./configure)
-          make -C /tmp/musl-1.2.5 CC=aarch64-linux-gnu-gcc -j2
-          cp /tmp/musl-1.2.5/lib/libc.so app/src/main/jniLibs/arm64-v8a/libmusl-loader.so
-
-          # Bundle OpenCode's C++ runtime.
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
-              set -eux
-              apk add --no-cache libstdc++
-              cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
-              cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
-            '
-          sudo chown -R "$(id -u):$(id -g)" app/src/main/jniLibs/arm64-v8a
-
-          # Android APK native libraries need .so names; rewrite OpenCode SONAME dependencies.
-          patchelf --replace-needed libstdc++.so.6 libstdcpp.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libstdcpp.so
-
-          chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
-          file app/src/main/jniLibs/arm64-v8a/*.so
-
-      - name: Verify ARM64 binaries and patch
-        shell: bash
-        run: |
-          set -euxo pipefail
-          for f in app/src/main/jniLibs/arm64-v8a/*.so; do
-            readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
-          done
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libstdcpp.so
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libgcccompat.so
-          test -x app/src/main/jniLibs/arm64-v8a/libagyld.so
-          test -x app/src/main/jniLibs/arm64-v8a/libagycore.so
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libagycore.so | grep -E '^libagyrt_'
-
-      - name: Strict runtime smoke test
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro" \
-            alpine:3.22 sh -lc '
-              set -eux
-              /ai/libcodex.so --version
-              /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
-              PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so --version
-              PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so --help >/dev/null
-            '
-
-      - name: Verify V3.3 Android regression guards
-        shell: bash
-        run: |
-          set -euxo pipefail
-          SRC=app/src/main/java/com/kai/terminal/MainActivity.java
-          grep -F 'ChatGPT Pro/Plus (headless)' "$SRC"
-          grep -F 'codex login --device-auth' "$SRC"
-          grep -F 'modeRow' "$SRC"
-          grep -F 'byte[] readBuffer = new byte[2048]' "$SRC"
-          grep -F 'command.startsWith("!")' "$SRC"
-          grep -F 'Ask " + modeLabel(session.mode)' "$SRC"
-          grep -F 'cleanProcessChunk(session' "$SRC"
-          grep -F 'codexAuthWaitingShown' "$SRC"
-          grep -F 'Selesaikan login di browser memakai URL + kode di atas.' "$SRC"
-          grep -F 'showCodexDeviceDialog(session, url, code)' "$SRC"
-          grep -F 'CODEX_DEVICE_CODE_TTL_MS' "$SRC"
-          grep -F 'RETRY LOGIN' "$SRC"
-          grep -F 'Device code copied. Tap OPEN LOGIN.' "$SRC"
-          grep -F 'LocalConnectProxy' "$SRC"
-          grep -F '__KAI_CODEX_BRIDGE_OK__' "$SRC"
-          grep -F 'syncCodexAuthFromOpenCode' "$SRC"
-          grep -F 'agent masih berjalan' "$SRC"
-          grep -F 'libagyld.so' "$SRC"
-          grep -F 'libagycore.so' "$SRC"
-
-          python3 -c 'import re; s="https://auth.openai.com/codex/device\n2UCS8C403"; u=re.search(r"https://[^\s]+/codex/device",s); c=re.search(r"\b(?=[A-Z0-9-]{9,10}\b)(?=[A-Z0-9-]*\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\b",s); assert u and u.group()=="https://auth.openai.com/codex/device"; assert c and c.group()=="2UCS8C403"; print("Codex device prompt parser fixture: PASS")'
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Build V3.3 APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Prepare APK
-        run: |
-          mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.3.0-AI.apk
-          sha256sum dist/KaiTerminal-v3.3.0-AI.apk
-          ls -lh dist/KaiTerminal-v3.3.0-AI.apk
-
-      - name: Verify final APK
-        run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.3.0-AI.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.3.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagycore|libagyld|libagyrt_|libmusl-loader|libstdcpp|libgcccompat)'
-
-      - name: Smoke test packaged APK binaries and multiline wrapper
-        shell: bash
-        run: |
-          set -euxo pipefail
-          rm -rf /tmp/kai-apk-smoke
-          mkdir -p /tmp/kai-apk-smoke
-          unzip -q dist/KaiTerminal-v3.3.0-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
-          chmod 755 /tmp/kai-apk-smoke/lib/arm64-v8a/*.so
-
-          docker run --rm --platform linux/arm64             -v "/tmp/kai-apk-smoke/lib/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
-              set -eux
-              codex() { /ai/libcodex.so "$@"; }
-              opencode() { /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so "$@"; }
-              agy() { PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so "$@"; }
-
-              echo "== direct startup =="
-              codex --version
-              opencode --version
-              agy --version
-
-              echo "== auth/help entrypoints =="
-              codex login --help >/dev/null
-              opencode auth --help >/dev/null
-              opencode auth login --help > /tmp/opencode-auth-login-help.txt 2>&1
-              grep -F -- '--method' /tmp/opencode-auth-login-help.txt
-              agy --help >/dev/null
-
-              echo "== multiline paste regression =="
-              sh -ec '"'"'
-                codex() { /ai/libcodex.so "$@"; }
-                opencode() { /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so "$@"; }
-                agy() { PREFIX=/tmp/kai-agy GODEBUG=netdns=cgo SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt /ai/libagyld.so --library-path /ai /ai/libagycore.so "$@"; }
-                codex --version
-                opencode --version
-                agy --version
-              '"'"'
-
-              echo "== ai doctor equivalent =="
-              printf "Codex: "; codex --version
-              printf "OpenCode: "; opencode --version
-              printf "Antigravity: "; agy --version
-            '
-
-      - name: Validate APK archive integrity
-        shell: bash
-        run: |
-          set -euxo pipefail
-          unzip -t dist/KaiTerminal-v3.3.0-AI.apk >/tmp/apk-integrity.txt
-          grep -F 'No errors detected in compressed data' /tmp/apk-integrity.txt
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: KaiTerminal-v3.3.0-AI
-          path: dist/KaiTerminal-v3.3.0-AI.apk
-          if-no-files-found: error
-
-      - name: Publish direct APK release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          TAG="kai-terminal-v3.3.0"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/KaiTerminal-v3.3.0-AI.apk --clobber
-          else
-            gh release create "$TAG"               dist/KaiTerminal-v3.3.0-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.3.0"               --notes "Android ARM64 build. Adds Codex Android network proxy + OpenCode auth bridge, safe AI mode switching, and a standalone VA39/glibc Antigravity runtime. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
+            gh release create "$TAG" dist/KaiTerminal-v3.3.0-AI.apk \
+              --target "$GITHUB_SHA" \
+              --title "Kai Terminal v3.3.0" \
+              --notes "Android ARM64 build with Codex Android network proxy and OpenCode auth bridge, safe AI mode switching, and VA39/glibc Antigravity runtime. Passed packaged-APK smoke tests."
           fi
