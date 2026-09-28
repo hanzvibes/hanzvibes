@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y -qq gcc-aarch64-linux-gnu make patchelf xz-utils
           GLIBC_BASE=https://packages-cf.termux.dev/apt/termux-glibc
           curl -fL --retry 3 "$GLIBC_BASE/dists/glibc/stable/binary-aarch64/Packages" -o /tmp/glibc-Packages
-          grep -q '^Package: glibc
+          grep -Fq "Package: glibc" /tmp/glibc-Packages
           GLIBC_FILE="$(awk 'BEGIN{p=0} /^Package: glibc$/{p=1} p && /^Filename: /{print $2; exit}' /tmp/glibc-Packages)"
           test -n "$GLIBC_FILE"
           curl -fL --retry 3 "$GLIBC_BASE/$GLIBC_FILE" -o /tmp/termux-glibc.deb
