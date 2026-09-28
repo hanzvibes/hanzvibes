@@ -686,7 +686,7 @@ public class MainActivity extends Activity {
                         String existing = android.system.Os.readlink(link.getAbsolutePath());
                         if (target.getAbsolutePath().equals(existing)) continue;
                     } catch (Exception ignored) {}
-                    try { android.system.Os.unlink(link.getAbsolutePath()); } catch (Exception ignored) {}
+                    try { java.nio.file.Files.deleteIfExists(link.toPath()); } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
 
