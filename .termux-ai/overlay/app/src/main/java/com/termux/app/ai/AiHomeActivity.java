@@ -33,6 +33,7 @@ public final class AiHomeActivity extends AppCompatActivity {
         findViewById(R.id.ai_tool_antigravity).setOnClickListener(v -> openTool("antigravity", "Antigravity"));
         findViewById(R.id.ai_tool_claude).setOnClickListener(v -> openTool("claude", "Claude"));
         findViewById(R.id.ai_tool_gemini).setOnClickListener(v -> openTool("gemini", "Gemini"));
+        findViewById(R.id.ai_tool_grok).setOnClickListener(v -> openTool("grok", "Grok"));
 
         findViewById(R.id.open_terminal_button).setOnClickListener(v ->
             startActivity(new Intent(this, TermuxActivity.class)));
