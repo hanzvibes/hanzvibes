@@ -1,0 +1,115 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -Eeuo pipefail
+
+DISTRO="debian"
+
+say() { printf '\n\033[1;36m[Workspace]\033[0m %s\n' "$*"; }
+warn() { printf '\n\033[1;33m[Workspace]\033[0m %s\n' "$*" >&2; }
+die() { printf '\n\033[1;31m[Workspace]\033[0m %s\n' "$*" >&2; exit 1; }
+
+ensure_host_runtime() {
+  command -v pkg >/dev/null 2>&1 || die "Local runtime is not ready."
+
+  if ! command -v proot-distro >/dev/null 2>&1; then
+    say "Preparing compatibility runtime..."
+    pkg update -y
+    pkg install -y proot-distro
+  fi
+
+  if ! proot-distro login "$DISTRO" -- /bin/true >/dev/null 2>&1; then
+    say "Installing local Linux environment..."
+    proot-distro install "$DISTRO"
+  fi
+}
+
+linux() {
+  proot-distro login "$DISTRO" --termux-home --shared-tmp -- bash -lc "$1"
+}
+
+ensure_linux_base() {
+  ensure_host_runtime
+  if ! linux 'command -v curl >/dev/null && command -v git >/dev/null && command -v node >/dev/null && command -v npm >/dev/null' >/dev/null 2>&1; then
+    say "Installing runtime dependencies..."
+    linux 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git bash nodejs npm'
+  fi
+}
+
+path_env='export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.grok/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; npm config set prefix "$HOME/.npm-global" >/dev/null 2>&1 || true'
+
+is_installed() {
+  local cmd="$1"
+  ensure_linux_base
+  linux "$path_env; command -v $cmd >/dev/null 2>&1"
+}
+
+install_tool() {
+  case "$1" in
+    codex)
+      say "Installing OpenAI Codex..."
+      linux "$path_env; export CODEX_NON_INTERACTIVE=1; curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+      ;;
+    opencode)
+      say "Installing OpenCode..."
+      linux "$path_env; curl -fsSL https://opencode.ai/v2/install | bash"
+      ;;
+    antigravity)
+      say "Installing Antigravity..."
+      linux "$path_env; curl -fsSL https://antigravity.google/cli/install.sh | bash"
+      ;;
+    claude)
+      say "Installing Claude Code..."
+      linux "$path_env; curl -fsSL https://claude.ai/install.sh | bash"
+      ;;
+    gemini)
+      say "Installing Gemini CLI..."
+      linux "$path_env; npm install -g @google/gemini-cli@latest"
+      ;;
+    grok)
+      say "Installing Grok Build..."
+      linux "$path_env; curl -fsSL https://x.ai/cli/install.sh | bash"
+      ;;
+    *)
+      die "Unknown agent: $1"
+      ;;
+  esac
+}
+
+command_for() {
+  case "$1" in
+    antigravity) printf 'agy' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+run_agent() {
+  local key="$1"
+  local cmd
+  cmd="$(command_for "$key")"
+  ensure_linux_base
+
+  if ! is_installed "$cmd"; then
+    install_tool "$key"
+  fi
+
+  say "Launching $key..."
+  exec proot-distro login "$DISTRO" --termux-home --shared-tmp --     bash -lc "$path_env; exec $cmd"
+}
+
+case "${1:-}" in
+  codex|opencode|antigravity|claude|gemini|grok) run_agent "$1" ;;
+  status)
+    ensure_linux_base
+    for pair in 'Codex:codex' 'OpenCode:opencode' 'Antigravity:agy' 'Claude:claude' 'Gemini:gemini' 'Grok:grok'; do
+      name="${pair%%:*}"
+      cmd="${pair##*:}"
+      if is_installed "$cmd"; then
+        printf '%-14s ready\n' "$name"
+      else
+        printf '%-14s not installed\n' "$name"
+      fi
+    done
+    ;;
+  *)
+    printf 'Usage: agent-runtime {codex|opencode|antigravity|claude|gemini|grok|status}\n'
+    ;;
+esac
