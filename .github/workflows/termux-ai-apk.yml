@@ -3,9 +3,9 @@ name: Build Termux AI APK
 on:
   push:
     branches:
-      - 'termux-ai/ui-v4-brainless'
+      - 'termux-ai/ui-v4-1-webview-fix'
     paths:
-      - '.termux-ai/TRIGGER_BUILD_V4'
+      - '.termux-ai/TRIGGER_BUILD_V4_1'
   workflow_dispatch:
 
 permissions:
@@ -36,6 +36,9 @@ jobs:
           bun install
           bunx --bun shadcn@latest add @brainless/claude-session @brainless/codex-session @brainless/grok-session @brainless/grok-thinking @brainless/grok-working --yes
           bun run build
+          python3 inline_dist.py
+          test ! -d dist/assets
+          grep -q '<script defer>' dist/index.html
 
       - name: Fetch audited Termux source
         run: |
@@ -57,8 +60,8 @@ jobs:
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: termux-ai-v4-brainless
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.4
+          TERMUX_APK_VERSION_TAG: termux-ai-v4.1-brainless
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.4.1
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -67,7 +70,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: termux-ai-v4-brainless-apks
+          name: termux-ai-v4-1-brainless-apks
           if-no-files-found: error
           retention-days: 7
           path: |
