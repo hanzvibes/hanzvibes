@@ -136,7 +136,7 @@ jobs:
           grep -F 'RETRY LOGIN' "$SRC"
           grep -F 'Device code copied. Tap OPEN LOGIN.' "$SRC"
 
-          python3 -c 'import re; s="https://auth.openai.com/codex/device\n2UCS8C403"; u=re.search(r"https://[^\\s]+/codex/device",s); c=re.search(r"\\b(?=[A-Z0-9-]{9,10}\\b)(?=[A-Z0-9-]*\\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\\b",s); assert u and u.group()=="https://auth.openai.com/codex/device"; assert c and c.group()=="2UCS8C403"; print("Codex device prompt parser fixture: PASS")'
+          python3 -c 'import re; s="https://auth.openai.com/codex/device\n2UCS8C403"; u=re.search(r"https://[^\s]+/codex/device",s); c=re.search(r"\b(?=[A-Z0-9-]{9,10}\b)(?=[A-Z0-9-]*\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\b",s); assert u and u.group()=="https://auth.openai.com/codex/device"; assert c and c.group()=="2UCS8C403"; print("Codex device prompt parser fixture: PASS")'
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
