@@ -9,6 +9,9 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.Spannable;
@@ -33,8 +36,12 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -112,6 +119,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        prepareNetworkRuntime();
         loadHistory();
         restoreSessions();
         buildUi();
@@ -132,7 +140,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v3 · AI", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3.1 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -368,12 +376,24 @@ public class MainActivity extends Activity {
             runAiDoctor(session);
             return true;
         }
+        if (command.equals("ask-codex")) {
+            append(session, "usage: ask-codex <prompt>\n", MUTED);
+            return true;
+        }
         if (command.startsWith("ask-codex ")) {
             runShell(session, "codex exec " + shellQuote(command.substring(10).trim()));
             return true;
         }
+        if (command.equals("ask-opencode")) {
+            append(session, "usage: ask-opencode <prompt>\n", MUTED);
+            return true;
+        }
         if (command.startsWith("ask-opencode ")) {
             runShell(session, "opencode run " + shellQuote(command.substring(13).trim()));
+            return true;
+        }
+        if (command.equals("ask-agy")) {
+            append(session, "usage: ask-agy <prompt>\n", MUTED);
             return true;
         }
         if (command.startsWith("ask-agy ")) {
@@ -433,7 +453,7 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 3.0.0\n" +
+                    "Kai Terminal 3.1.0\n" +
                     "Local Android shell with persistent multi-session workspace.\n" +
                     "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
                     "Commands run inside Android app permissions. No root required.\n",
@@ -459,6 +479,7 @@ public class MainActivity extends Activity {
         session.executor.execute(() -> {
             int exitCode = -1;
             try {
+                prepareNetworkRuntime();
                 String expandedCommand = expandBundledCli(command);
                 ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", expandedCommand);
                 pb.directory(session.currentDir);
@@ -469,6 +490,12 @@ public class MainActivity extends Activity {
                 pb.environment().put("NO_COLOR", "1");
                 pb.environment().put("CLICOLOR", "0");
                 pb.environment().put("SHELL", "/system/bin/sh");
+                pb.environment().put("GODEBUG", "netdns=go");
+                pb.environment().put("KAI_RESOLV_CONF",
+                        new File(getFilesDir(), "resolv.conf").getAbsolutePath());
+                pb.environment().put("KAI_CA_FILE",
+                        new File(getFilesDir(), "kai-ca.pem").getAbsolutePath());
+                pb.environment().put("PROOT_TMP_DIR", getCacheDir().getAbsolutePath());
                 pb.environment().put("PATH",
                         getApplicationInfo().nativeLibraryDir + ":/system/bin:/system/xbin");
 
@@ -555,29 +582,33 @@ public class MainActivity extends Activity {
     }
 
     private String expandBundledCli(String command) {
-        String trimmed = command.trim();
-        String[][] mappings = new String[][]{
-                {"opencode", "libopencode.so"},
-                {"codex", "libcodex.so"},
-                {"agy", "libagy.so"}
-        };
-        for (String[] mapping : mappings) {
-            String name = mapping[0];
-            if (trimmed.equals(name) || trimmed.startsWith(name + " ")) {
-                String suffix = trimmed.substring(name.length());
-                String nativeDir = getApplicationInfo().nativeLibraryDir;
-                String binary = new File(nativeDir, mapping[1]).getAbsolutePath();
+        String nativeDir = getApplicationInfo().nativeLibraryDir;
 
-                if (name.equals("opencode")) {
-                    String loader = new File(nativeDir, "libmusl-loader.so").getAbsolutePath();
-                    return shellQuote(loader) + " --library-path " + shellQuote(nativeDir) +
-                            " " + shellQuote(binary) + suffix;
-                }
+        String codex = shellQuote(new File(nativeDir, "libcodex.so").getAbsolutePath());
+        String opencode = shellQuote(new File(nativeDir, "libopencode.so").getAbsolutePath());
+        String musl = shellQuote(new File(nativeDir, "libmusl-loader.so").getAbsolutePath());
 
-                return shellQuote(binary) + suffix;
-            }
-        }
-        return command;
+        String agy = shellQuote(new File(nativeDir, "libagy.so").getAbsolutePath());
+        String agyLoader = shellQuote(new File(nativeDir, "libagyld.so").getAbsolutePath());
+        String proot = shellQuote(new File(nativeDir, "libproot.so").getAbsolutePath());
+        String libraryPath = shellQuote(nativeDir);
+
+        StringBuilder prelude = new StringBuilder();
+        prelude.append("codex() { ").append(codex).append(" \"$@\"; }\n");
+        prelude.append("opencode() { ").append(musl)
+                .append(" --library-path ").append(libraryPath).append(" ")
+                .append(opencode).append(" \"$@\"; }\n");
+        prelude.append("agy() { ")
+                .append("SSL_CERT_FILE=\"$KAI_CA_FILE\" GODEBUG=netdns=go ")
+                .append(proot)
+                .append(" -b \"$KAI_RESOLV_CONF:/etc/resolv.conf\" ")
+                .append(" -b /system/bin/sh:/bin/sh ")
+                .append(agyLoader)
+                .append(" --library-path ").append(libraryPath).append(" ")
+                .append(agy).append(" \"$@\"; }\n");
+
+        prelude.append(command);
+        return prelude.toString();
     }
 
     private String shellQuote(String value) {
@@ -588,7 +619,7 @@ public class MainActivity extends Activity {
         append(session, "AI CLI HUB · BUILT-IN\n", GREEN);
         append(session, "  opencode   OpenCode CLI (ARM64 musl)\n", TEXT);
         append(session, "  codex      OpenAI Codex CLI (ARM64 musl)\n", TEXT);
-        append(session, "  agy        Google Antigravity CLI (ARM64 musl)\n\n", TEXT);
+        append(session, "  agy        Google Antigravity CLI (Android patched)\n\n", TEXT);
         append(session, "Quick one-shot usage:\n", BLUE);
         append(session, "  ask-opencode Explain this folder\n", TEXT);
         append(session, "  ask-codex Review this project\n", TEXT);
@@ -604,24 +635,75 @@ public class MainActivity extends Activity {
     }
 
     private void runAiDoctor(TerminalSession session) {
-        append(session, "AI Doctor\n", GREEN);
-        String[][] binaries = new String[][]{
-                {"OpenCode", "libopencode.so"},
-                {"Codex", "libcodex.so"},
-                {"Antigravity", "libagy.so"}
-        };
-        for (String[] binary : binaries) {
-            File file = new File(getApplicationInfo().nativeLibraryDir, binary[1]);
-            boolean ready = file.exists() && file.canExecute();
-            append(session,
-                    "  " + binary[0] + ": " +
-                            (ready ? "READY" : "MISSING") +
-                            " · " + file.getAbsolutePath() + "\n",
-                    ready ? GREEN : RED);
+        append(session, "AI Doctor · runtime self-test\n", GREEN);
+        append(session, "Testing the actual executables, not only checking files...\n", MUTED);
+        runShell(session,
+                "set -e\n" +
+                "printf 'Codex: '; codex --version\n" +
+                "printf 'OpenCode: '; opencode --version\n" +
+                "printf 'Antigravity: '; agy --version\n" +
+                "printf 'All AI runtimes: READY\\n'");
+    }
+
+    private synchronized void prepareNetworkRuntime() {
+        writeResolverConfig();
+        writeSystemCaBundle();
+    }
+
+    private void writeResolverConfig() {
+        File target = new File(getFilesDir(), "resolv.conf");
+        LinkedHashSet<String> servers = new LinkedHashSet<>();
+
+        try {
+            ConnectivityManager cm =
+                    (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            Network network = cm == null ? null : cm.getActiveNetwork();
+            LinkProperties props =
+                    (cm == null || network == null) ? null : cm.getLinkProperties(network);
+            if (props != null) {
+                for (java.net.InetAddress dns : props.getDnsServers()) {
+                    if (dns != null && dns.getHostAddress() != null) {
+                        servers.add(dns.getHostAddress());
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (servers.isEmpty()) {
+            servers.add("8.8.8.8");
+            servers.add("1.1.1.1");
         }
-        append(session, "  ABI: " + android.os.Build.SUPPORTED_ABIS[0] + "\n", TEXT);
-        append(session, "  Network: Android INTERNET permission enabled\n", TEXT);
-        append(session, "  Shell: /system/bin/sh\n", TEXT);
+
+        try (PrintWriter writer = new PrintWriter(
+                new OutputStreamWriter(new FileOutputStream(target, false),
+                        java.nio.charset.StandardCharsets.UTF_8))) {
+            for (String server : servers) {
+                writer.println("nameserver " + server);
+            }
+            writer.println("options timeout:2 attempts:2");
+        } catch (Exception ignored) {}
+    }
+
+    private void writeSystemCaBundle() {
+        File target = new File(getFilesDir(), "kai-ca.pem");
+        File sourceDir = new File("/system/etc/security/cacerts");
+        File[] certs = sourceDir.listFiles();
+        if (certs == null || certs.length == 0) return;
+
+        Arrays.sort(certs, Comparator.comparing(File::getName));
+        try (FileOutputStream outputStream = new FileOutputStream(target, false)) {
+            byte[] buffer = new byte[8192];
+            for (File cert : certs) {
+                if (!cert.isFile() || !cert.canRead()) continue;
+                try (FileInputStream inputStream = new FileInputStream(cert)) {
+                    int read;
+                    while ((read = inputStream.read(buffer)) > 0) {
+                        outputStream.write(buffer, 0, read);
+                    }
+                    outputStream.write('\n');
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
     }
 
     private String stripAnsi(String value) {
@@ -1013,7 +1095,7 @@ public class MainActivity extends Activity {
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 3.0.0\n", GREEN);
+        appendRaw(session, "Kai Terminal 3.1.0\n", GREEN);
         appendRaw(session, "AI-native Android shell · ARM64 edition\n", MUTED);
         appendRaw(session, "Built in: opencode · codex · agy\n", BLUE);
         appendRaw(session, "TAB autocomplete · CTRL-C cancel · type 'ai' or 'help'\n\n", MUTED);
