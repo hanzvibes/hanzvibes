@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ai_home_brand">TERMUX AI</string>
+    <string name="ai_home_title">Coding cockpit</string>
+    <string name="ai_home_subtitle">Your AI CLIs, projects and terminal in one place.</string>
+    <string name="ai_runtime_label">Workspace runtime</string>
+    <string name="ai_status_local">LOCAL</string>
+    <string name="ai_runtime_first_run">Ready to configure • setup happens on first launch</string>
+    <string name="ai_runtime_ready">Runtime launcher ready • tools install on demand</string>
+    <string name="ai_open_terminal">Open terminal</string>
+    <string name="ai_quick_launch">Quick launch</string>
+    <string name="ai_quick_launch_subtitle">Pick an AI coding tool and jump straight into a session.</string>
+    <string name="ai_manage">Manage</string>
+    <string name="ai_cli_status">CLI status</string>
+    <string name="ai_cli_update">Update all</string>
+    <string name="ai_home_footer">Termux engine • AI Workspace v2</string>
+    <string name="ai_codex_name">Codex</string>
+    <string name="ai_codex_desc">OpenAI coding agent</string>
+    <string name="ai_opencode_name">OpenCode</string>
+    <string name="ai_opencode_desc">Open coding agent workspace</string>
+    <string name="ai_antigravity_name">Antigravity</string>
+    <string name="ai_antigravity_desc">Google agentic CLI</string>
+    <string name="ai_claude_name">Claude Code</string>
+    <string name="ai_claude_desc">Anthropic coding agent</string>
+    <string name="ai_gemini_name">Gemini CLI</string>
+    <string name="ai_gemini_desc">Google Gemini in your terminal</string>
+</resources>
