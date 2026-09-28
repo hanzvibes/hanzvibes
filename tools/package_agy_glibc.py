@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-if len(sys.argv) != 3:
-    raise SystemExit("usage: package_agy_glibc.py <glibc-lib-dir> <jni-dir>")
+if len(sys.argv) != 4:
+    raise SystemExit("usage: package_agy_glibc.py <glibc-lib-dir> <jni-dir> <map-file>")
 
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
-mapping = {}
-outputs = []
+map_file = Path(sys.argv[3])
 
-def elf(path: Path) -> bool:
+def elf(path):
     try:
         with path.open("rb") as f:
             return f.read(4) == b"\x7fELF"
@@ -21,58 +19,46 @@ def elf(path: Path) -> bool:
         return False
 
 if not src.is_dir():
-    raise SystemExit(f"glibc lib directory not found: {src}")
-dst.mkdir(parents=True, exist_ok=True)
+    raise SystemExit("glibc lib directory not found: " + str(src))
 
-for entry in src.iterdir():
+dst.mkdir(parents=True, exist_ok=True)
+map_file.parent.mkdir(parents=True, exist_ok=True)
+mapping = {}
+target_to_safe = {}
+
+for entry in sorted(src.iterdir(), key=lambda p: p.name):
     try:
         target = entry.resolve()
     except Exception:
         continue
     if not target.is_file() or not elf(target):
         continue
-    safe = "libagyld.so" if entry.name == "ld-linux-aarch64.so.1" else (
-        "libagyrt_" + re.sub(r"[^A-Za-z0-9]+", "_", entry.name).strip("_") + ".so"
-    )
+
+    key = str(target)
+    if key in target_to_safe:
+        safe = target_to_safe[key]
+    elif entry.name == "ld-linux-aarch64.so.1":
+        safe = "libagyld.so"
+        target_to_safe[key] = safe
+        shutil.copy2(target, dst / safe)
+    else:
+        safe = "libagyrt_" + re.sub(r"[^A-Za-z0-9]+", "_", target.name).strip("_") + ".so"
+        target_to_safe[key] = safe
+        if not (dst / safe).exists():
+            shutil.copy2(target, dst / safe)
+
     mapping[entry.name] = safe
-    out = dst / safe
-    if not out.exists():
-        shutil.copy2(target, out)
-    outputs.append(out)
+    mapping[target.name] = safe
 
-core = dst / "libagycore.so"
-if not core.is_file():
-    raise SystemExit("libagycore.so not found")
-outputs.append(core)
+with map_file.open("w", encoding="utf-8") as f:
+    f.write("# original-name\tandroid-safe-native-library\n")
+    for original, safe in sorted(mapping.items()):
+        f.write(original + "\t" + safe + "\n")
 
-for f in outputs:
-    if f.name == "libagyld.so":
-        continue
-    subprocess.run(
-        ["patchelf", "--set-soname", f.name, str(f)],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-for f in outputs:
-    try:
-        needed = subprocess.check_output(["patchelf", "--print-needed", str(f)], text=True).splitlines()
-    except Exception:
-        continue
-    for old in needed:
-        if old in mapping:
-            subprocess.run(["patchelf", "--replace-needed", old, mapping[old], str(f)], check=True)
-
-loader = dst / "libagyld.so"
-if not loader.is_file():
+if not (dst / "libagyld.so").is_file():
     raise SystemExit("glibc loader was not packaged")
+if not (dst / "libagycore.so").is_file():
+    raise SystemExit("libagycore.so not found")
 
-needed_core = subprocess.check_output(["patchelf", "--print-needed", str(core)], text=True).splitlines()
-names = {p.name for p in dst.iterdir()}
-missing = [name for name in needed_core if name not in names]
-if missing:
-    raise SystemExit("unresolved AGY core dependencies: " + ", ".join(missing))
-
-print(f"AGY runtime aliases: {len(mapping)}")
-print("AGY core needs:", ", ".join(needed_core))
+print("AGY runtime files:", len(target_to_safe))
+print("AGY symlink aliases:", len(mapping))

@@ -45,7 +45,7 @@ mkdir -p "$TMP/termux-glibc"
 dpkg-deb -x "$TMP/termux-glibc.deb" "$TMP/termux-glibc"
 GLIBC_DIR="$(find "$TMP/termux-glibc" -type d -path '*/glibc/lib' | head -1)"
 test -n "$GLIBC_DIR"
-python3 tools/package_agy_glibc.py "$GLIBC_DIR" "$JNI"
+python3 tools/package_agy_glibc.py "$GLIBC_DIR" "$JNI" app/src/main/assets/agy-lib-map.txt
 
 curl -fL --retry 3 https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$TMP/musl.tar.gz"
 echo "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  $TMP/musl.tar.gz" | sha256sum -c -

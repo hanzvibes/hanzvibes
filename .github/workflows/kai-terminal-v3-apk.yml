@@ -72,6 +72,8 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.3.0-AI.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.3.0-AI.apk | head -25
           unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libmusl-loader|libstdcpp|libgcccompat|libagycore|libagyld|libagyrt_)'
+          unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -F 'assets/agy-lib-map.txt'
+          unzip -l dist/KaiTerminal-v3.3.0-AI.apk | grep -F 'assets/agy-ca.pem'
 
       - name: Smoke test packaged APK runtimes
         shell: bash

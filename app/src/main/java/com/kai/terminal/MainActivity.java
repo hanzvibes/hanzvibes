@@ -401,6 +401,7 @@ public class MainActivity extends Activity {
         if (!cert.exists() || cert.length() < 1000) {
             copyAssetToFile("agy-ca.pem", cert);
         }
+        prepareAgyLibraryLinks(agyPrefix);
     }
 
     private void loadHistory() {
@@ -747,13 +748,14 @@ public class MainActivity extends Activity {
         String loader = shellQuote(new File(nativeDir, "libmusl-loader.so").getAbsolutePath());
         String agyLoader = shellQuote(new File(nativeDir, "libagyld.so").getAbsolutePath());
         String agyCore = shellQuote(new File(nativeDir, "libagycore.so").getAbsolutePath());
+        String agyLibDir = shellQuote(new File(getFilesDir(), "agy-runtime/lib").getAbsolutePath());
 
         return "codex() { " + codex + " \"$@\"; }\n" +
                 "opencode() { " + loader + " --library-path " + shellQuote(nativeDir) +
                 " " + opencode + " \"$@\"; }\n" +
                 "agy() { PREFIX=\"$KAI_AGY_PREFIX\" GODEBUG=netdns=cgo " +
                 "SSL_CERT_FILE=\"$KAI_AGY_CERT\" DBUS_SESSION_BUS_ADDRESS='unix:path=/dev/null' " +
-                agyLoader + " --library-path " + shellQuote(nativeDir) + " " +
+                agyLoader + " --library-path " + agyLibDir + " " +
                 agyCore + " \"$@\"; }\n";
     }
 
@@ -962,6 +964,29 @@ public class MainActivity extends Activity {
             if (verbose) append(session, "[Codex bridge] " + e.getMessage() + "\n", RED);
             return false;
         }
+    }
+
+    private void prepareAgyLibraryLinks(File agyPrefix) {
+        File libDir = new File(agyPrefix, "lib");
+        libDir.mkdirs();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(getAssets().open("agy-lib-map.txt")))) {
+            String line;
+            String nativeDir = getApplicationInfo().nativeLibraryDir;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty() || line.startsWith("#")) continue;
+                String[] parts = line.split("\\t", 2);
+                if (parts.length != 2) continue;
+                File link = new File(libDir, parts[0]);
+                File target = new File(nativeDir, parts[1]);
+                if (!target.isFile()) continue;
+                try {
+                    java.nio.file.Files.deleteIfExists(link.toPath());
+                    java.nio.file.Files.createSymbolicLink(
+                            link.toPath(), target.toPath().toAbsolutePath());
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
     }
 
     private void copyAssetToFile(String assetName, File target) {
