@@ -22,6 +22,10 @@ public final class AiCliManager {
 
     private AiCliManager() {}
 
+    public static File getLauncherFile() {
+        return new File(TermuxConstants.TERMUX_HOME_DIR, LAUNCHER_DIR + "/" + LAUNCHER_NAME);
+    }
+
     public static void showHub(final TermuxActivity activity) {
         final String[] labels = new String[] {
             "Codex CLI",
@@ -65,7 +69,7 @@ public final class AiCliManager {
                 }
 
                 try {
-                    File launcher = installOrRefreshLauncher(activity);
+                    File launcher = prepareLauncher(activity);
                     activity.launchCommandInNewSession(launcher.getAbsolutePath() + " " + action, sessionName);
                 } catch (IOException e) {
                     Toast.makeText(activity, R.string.msg_ai_launcher_error, Toast.LENGTH_LONG).show();
@@ -75,7 +79,7 @@ public final class AiCliManager {
             .show();
     }
 
-    private static File installOrRefreshLauncher(Context context) throws IOException {
+    public static File prepareLauncher(Context context) throws IOException {
         File launcherDir = new File(TermuxConstants.TERMUX_HOME_DIR, LAUNCHER_DIR);
         if (!launcherDir.exists() && !launcherDir.mkdirs()) {
             throw new IOException("Unable to create " + launcherDir);
