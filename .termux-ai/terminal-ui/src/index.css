@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #090a0c;
+  color: #ededed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: #090a0c;
+}
+
+body {
+  overflow: hidden;
+}
+
+button, input, textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(167, 255, 79, 0.2);
+}
+
+.viewport-scroll {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #31343b transparent;
+}
