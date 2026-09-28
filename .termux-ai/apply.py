@@ -10,7 +10,7 @@ BASE_SHA = "8629e632fcb95da272221be327db653fb24befe9"
 
 def replace_once(path: Path, old: str, new: str) -> None:
     text = path.read_text(encoding="utf-8")
-    if new in text:
+    if new and new in text:
         return
     if old not in text:
         raise SystemExit(f"Patch anchor not found in {path}: {old[:80]!r}")
@@ -40,6 +40,13 @@ def main() -> None:
     session_client = repo / "app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java"
     layout = repo / "app/src/main/res/layout/activity_termux.xml"
     strings = repo / "app/src/main/res/values/strings.xml"
+    manifest = repo / "app/src/main/AndroidManifest.xml"
+
+    replace_once(
+        strings,
+        '<!ENTITY TERMUX_APP_NAME "Termux">',
+        '<!ENTITY TERMUX_APP_NAME "Termux AI">',
+    )
 
     replace_once(
         activity,
@@ -49,8 +56,70 @@ def main() -> None:
 
     replace_once(
         activity,
+        "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n",
+        "public final class TermuxActivity extends AppCompatActivity implements ServiceConnection {\n\n"
+        "    public static final String EXTRA_AI_COMMAND = \"com.termux.extra.AI_COMMAND\";\n"
+        "    public static final String EXTRA_AI_SESSION_NAME = \"com.termux.extra.AI_SESSION_NAME\";\n",
+    )
+
+    replace_once(
+        activity,
         "        setSettingsButtonView();\n\n        setNewSessionButtonView();",
         "        setSettingsButtonView();\n\n        setAiHubButtonView();\n\n        setNewSessionButtonView();",
+    )
+
+    replace_once(
+        activity,
+        "    @Override\n    public void onStart() {",
+        "    @Override\n"
+        "    protected void onNewIntent(Intent intent) {\n"
+        "        super.onNewIntent(intent);\n"
+        "        if (intent == null) return;\n"
+        "        String aiCommand = intent.getStringExtra(EXTRA_AI_COMMAND);\n"
+        "        if (aiCommand != null && mTermuxTerminalSessionActivityClient != null && mTermuxService != null) {\n"
+        "            String sessionName = intent.getStringExtra(EXTRA_AI_SESSION_NAME);\n"
+        "            mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, sessionName);\n"
+        "        } else {\n"
+        "            setIntent(intent);\n"
+        "        }\n"
+        "    }\n\n"
+        "    @Override\n"
+        "    public void onStart() {",
+    )
+
+    replace_once(
+        activity,
+        "        final Intent intent = getIntent();\n        setIntent(null);\n",
+        "        final Intent intent = getIntent();\n"
+        "        setIntent(null);\n"
+        "        final String aiCommand = intent == null ? null : intent.getStringExtra(EXTRA_AI_COMMAND);\n"
+        "        final String aiSessionName = intent == null ? null : intent.getStringExtra(EXTRA_AI_SESSION_NAME);\n",
+    )
+
+    replace_once(
+        activity,
+        "                        boolean launchFailsafe = false;\n"
+        "                        if (intent != null && intent.getExtras() != null) {\n"
+        "                            launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);\n"
+        "                        }\n"
+        "                        mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);",
+        "                        if (aiCommand != null) {\n"
+        "                            mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, aiSessionName);\n"
+        "                        } else {\n"
+        "                            boolean launchFailsafe = false;\n"
+        "                            if (intent != null && intent.getExtras() != null) {\n"
+        "                                launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);\n"
+        "                            }\n"
+        "                            mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);\n"
+        "                        }",
+    )
+
+    replace_once(
+        activity,
+        "            if (!mIsActivityRecreated && intent != null && Intent.ACTION_RUN.equals(intent.getAction())) {",
+        "            if (aiCommand != null) {\n"
+        "                mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, aiSessionName);\n"
+        "            } else if (!mIsActivityRecreated && intent != null && Intent.ACTION_RUN.equals(intent.getAction())) {",
     )
 
     replace_once(
@@ -120,7 +189,33 @@ def main() -> None:
         "    <string name=\"msg_ai_launcher_error\">Unable to prepare AI CLI launcher.</string>\n",
     )
 
-    print("Termux AI patch applied successfully.")
+    replace_once(
+        manifest,
+        "        <activity\n            android:name=\".app.TermuxActivity\"",
+        "        <activity\n"
+        "            android:name=\".app.ai.AiHomeActivity\"\n"
+        "            android:exported=\"true\"\n"
+        "            android:label=\"@string/application_name\"\n"
+        "            android:theme=\"@style/Theme.TermuxApp.DayNight.NoActionBar\">\n"
+        "            <intent-filter>\n"
+        "                <action android:name=\"android.intent.action.MAIN\" />\n"
+        "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
+        "            </intent-filter>\n"
+        "        </activity>\n\n"
+        "        <activity\n"
+        "            android:name=\".app.TermuxActivity\"",
+    )
+
+    replace_once(
+        manifest,
+        "            <intent-filter>\n"
+        "                <action android:name=\"android.intent.action.MAIN\" />\n\n"
+        "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
+        "            </intent-filter>\n",
+        "            <!-- Phone launcher moved to AiHomeActivity. -->\n",
+    )
+
+    print("Termux AI Workspace v2 patch applied successfully.")
     print("Base audited against upstream commit:", BASE_SHA)
     print("Next: ./gradlew assembleDebug")
 
