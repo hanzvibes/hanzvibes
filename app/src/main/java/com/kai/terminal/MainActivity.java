@@ -668,6 +668,9 @@ public class MainActivity extends Activity {
                 {"libpthread.so.0", "libagypthread.so"},
                 {"libdl.so.2", "libagydl.so"},
                 {"librt.so.1", "libagyrt.so"},
+                {"libresolv.so.2", "libagyresolv.so"},
+                {"libnss_dns.so.2", "libagynssdns.so"},
+                {"libnss_files.so.2", "libagynssfiles.so"},
                 {"libgcc_s.so.1", "libagygcc.so"},
                 {"libstdc++.so.6", "libagystdcpp.so"}
         };
