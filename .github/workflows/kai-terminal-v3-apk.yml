@@ -1,4 +1,4 @@
-name: Build Kai Terminal V3.2.1 AI APK
+name: Build Kai Terminal V3.2.2 AI APK
 
 on:
   push:
@@ -131,27 +131,47 @@ jobs:
           grep -F 'cleanProcessChunk(session' "$SRC"
           grep -F 'codexAuthWaitingShown' "$SRC"
           grep -F 'Selesaikan login di browser memakai URL + kode di atas.' "$SRC"
+          grep -F 'showCodexDeviceDialog(session, url, code)' "$SRC"
+          grep -F 'CODEX_DEVICE_CODE_TTL_MS' "$SRC"
+          grep -F 'RETRY LOGIN' "$SRC"
+          grep -F 'Device code copied. Tap OPEN LOGIN.' "$SRC"
+
+          python3 - <<'PY'
+import re
+sample = """
+Follow these steps to sign in with ChatGPT using device code authorization:
+1. Open this link in your browser and sign in to your account
+   https://auth.openai.com/codex/device
+2. Enter this one-time code (expires in 15 minutes)
+   2UCS8C403
+"""
+url = re.search(r"https://[^\s]+/codex/device", sample)
+code = re.search(r"\b(?=[A-Z0-9-]{9,10}\b)(?=[A-Z0-9-]*\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\b", sample)
+assert url and url.group() == "https://auth.openai.com/codex/device"
+assert code and code.group() == "2UCS8C403"
+print("Codex device prompt parser fixture: PASS")
+PY
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: Build V3.2.1 APK
+      - name: Build V3.2.2 APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.2.1-AI.apk
-          sha256sum dist/KaiTerminal-v3.2.1-AI.apk
-          ls -lh dist/KaiTerminal-v3.2.1-AI.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.2.2-AI.apk
+          sha256sum dist/KaiTerminal-v3.2.2-AI.apk
+          ls -lh dist/KaiTerminal-v3.2.2-AI.apk
 
       - name: Verify final APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.2.1-AI.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.2.1-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.2.1-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.2.2-AI.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.2.2-AI.apk | head -25
+          unzip -l dist/KaiTerminal-v3.2.2-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
 
       - name: Smoke test packaged APK binaries and multiline wrapper
         shell: bash
@@ -159,7 +179,7 @@ jobs:
           set -euxo pipefail
           rm -rf /tmp/kai-apk-smoke
           mkdir -p /tmp/kai-apk-smoke
-          unzip -q dist/KaiTerminal-v3.2.1-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
+          unzip -q dist/KaiTerminal-v3.2.2-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
           chmod 755 /tmp/kai-apk-smoke/lib/arm64-v8a/*.so
 
           docker run --rm --platform linux/arm64             -v "/tmp/kai-apk-smoke/lib/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
@@ -200,14 +220,14 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          unzip -t dist/KaiTerminal-v3.2.1-AI.apk >/tmp/apk-integrity.txt
+          unzip -t dist/KaiTerminal-v3.2.2-AI.apk >/tmp/apk-integrity.txt
           grep -F 'No errors detected in compressed data' /tmp/apk-integrity.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KaiTerminal-v3.2.1-AI
-          path: dist/KaiTerminal-v3.2.1-AI.apk
+          name: KaiTerminal-v3.2.2-AI
+          path: dist/KaiTerminal-v3.2.2-AI.apk
           if-no-files-found: error
 
       - name: Publish direct APK release
@@ -216,9 +236,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          TAG="kai-terminal-v3.2.1"
+          TAG="kai-terminal-v3.2.2"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/KaiTerminal-v3.2.1-AI.apk --clobber
+            gh release upload "$TAG" dist/KaiTerminal-v3.2.2-AI.apk --clobber
           else
-            gh release create "$TAG"               dist/KaiTerminal-v3.2.1-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.2.1"               --notes "Android ARM64 build. Fixes Codex device-login spinner flooding so the login URL and one-time code stay visible. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
+            gh release create "$TAG"               dist/KaiTerminal-v3.2.2-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.2.2"               --notes "Android ARM64 build. Adds a dedicated Codex device-login dialog with copied code, browser launch, 15-minute countdown, expiry handling, and one-tap retry. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
           fi

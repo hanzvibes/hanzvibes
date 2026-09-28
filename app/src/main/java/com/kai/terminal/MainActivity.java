@@ -1,6 +1,7 @@
 package com.kai.terminal;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -9,10 +10,14 @@ import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.CountDownTimer;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.method.LinkMovementMethod;
 import android.text.util.Linkify;
@@ -51,6 +56,8 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private static final int BG = Color.rgb(7, 10, 14);
@@ -79,6 +86,12 @@ public class MainActivity extends Activity {
     private static final String MODE_OPENCODE = "opencode";
     private static final String MODE_AGY = "agy";
 
+    private static final Pattern CODEX_DEVICE_URL =
+            Pattern.compile("https://[^\\s\\u001B]+/codex/device");
+    private static final Pattern CODEX_DEVICE_CODE =
+            Pattern.compile("\\b(?=[A-Z0-9-]{9,10}\\b)(?=[A-Z0-9-]*\\d)[A-Z0-9]{4}-?[A-Z0-9]{5}\\b");
+    private static final long CODEX_DEVICE_CODE_TTL_MS = 15L * 60L * 1000L;
+
     private final List<TerminalSession> sessions = new ArrayList<>();
     private final List<String> history = new ArrayList<>();
 
@@ -92,6 +105,8 @@ public class MainActivity extends Activity {
     private TextView statusLabel;
     private TextView promptLabel;
     private Button runButton;
+    private AlertDialog codexAuthDialog;
+    private CountDownTimer codexAuthTimer;
     private int activeIndex = 0;
     private int historyIndex = 0;
 
@@ -115,6 +130,8 @@ public class MainActivity extends Activity {
         volatile boolean running;
         volatile boolean cancelRequested;
         boolean codexAuthWaitingShown;
+        boolean codexAuthDialogShown;
+        final StringBuilder codexAuthCapture = new StringBuilder();
 
         TerminalSession(int id, String name, File currentDir) {
             this.id = id;
@@ -148,7 +165,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v3.2.1 · AI", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3.2.2 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -530,7 +547,7 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 3.2.1\n" +
+                    "Kai Terminal 3.2.2\n" +
                     "AI-first Android terminal with persistent multi-session workspace.\n" +
                     "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
                     "Mode AI accepts plain text; prefix ! for shell commands. No root required.\n",
@@ -636,6 +653,7 @@ public class MainActivity extends Activity {
             return;
         }
         session.cancelRequested = true;
+        if (MODE_CODEX.equals(session.mode)) dismissCodexAuthDialog();
         append(session, "^C\n", AMBER);
         Process process = session.currentProcess;
         try {
@@ -716,7 +734,7 @@ public class MainActivity extends Activity {
         refreshAll();
 
         if (MODE_CODEX.equals(mode)) {
-            session.codexAuthWaitingShown = false;
+            resetCodexAuthState(session);
             append(session,
                     "Codex login\n" +
                     "1. Tap URL yang muncul\n" +
@@ -746,7 +764,7 @@ public class MainActivity extends Activity {
 
         String q = shellQuote(prompt.trim());
         if (MODE_CODEX.equals(mode)) {
-            session.codexAuthWaitingShown = false;
+            resetCodexAuthState(session);
             runShell(session,
                     "if ! codex login status >/dev/null 2>&1; then " +
                     "echo '[Codex] login pertama kali diperlukan'; " +
@@ -817,6 +835,11 @@ public class MainActivity extends Activity {
         String cleaned = stripAnsi(value);
         if (cleaned.isEmpty()) return "";
 
+        captureCodexDeviceAuth(session, cleaned);
+        if (cleaned.contains("Successfully logged in")) {
+            runOnUiThread(() -> finishCodexAuthUi(session));
+        }
+
         // CLI spinners commonly redraw one line with carriage returns. Turning every
         // redraw into a newline floods the terminal and hides important login URLs/codes.
         String[] redraws = cleaned.split("\\r", -1);
@@ -844,6 +867,203 @@ public class MainActivity extends Activity {
         }
 
         return out.toString();
+    }
+
+    private void resetCodexAuthState(TerminalSession session) {
+        session.codexAuthWaitingShown = false;
+        session.codexAuthDialogShown = false;
+        session.codexAuthCapture.setLength(0);
+        dismissCodexAuthDialog();
+    }
+
+    private void captureCodexDeviceAuth(TerminalSession session, String chunk) {
+        if (!MODE_CODEX.equals(session.mode) || session.codexAuthDialogShown) return;
+
+        session.codexAuthCapture.append(chunk);
+        if (session.codexAuthCapture.length() > 12000) {
+            session.codexAuthCapture.delete(0, session.codexAuthCapture.length() - 12000);
+        }
+
+        String capture = session.codexAuthCapture.toString();
+        Matcher urlMatcher = CODEX_DEVICE_URL.matcher(capture);
+        if (!urlMatcher.find()) return;
+
+        String codeArea = capture;
+        int marker = capture.toLowerCase(Locale.ROOT).lastIndexOf("one-time code");
+        if (marker >= 0) codeArea = capture.substring(marker);
+
+        Matcher codeMatcher = CODEX_DEVICE_CODE.matcher(codeArea);
+        if (!codeMatcher.find()) return;
+
+        String url = urlMatcher.group();
+        String code = codeMatcher.group().toUpperCase(Locale.ROOT);
+        session.codexAuthDialogShown = true;
+
+        runOnUiThread(() -> showCodexDeviceDialog(session, url, code));
+    }
+
+    private void showCodexDeviceDialog(TerminalSession session, String url, String code) {
+        dismissCodexAuthDialog();
+
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("Codex device code", code));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(22), dp(8), dp(22), dp(4));
+
+        TextView intro = text(
+                "Kode sudah disalin. Tap OPEN LOGIN, lalu paste kode ini di halaman OpenAI.",
+                13, TEXT, Typeface.NORMAL);
+        intro.setPadding(0, 0, 0, dp(14));
+        box.addView(intro);
+
+        TextView codeView = text(code, 25, GREEN, Typeface.BOLD);
+        codeView.setGravity(Gravity.CENTER);
+        codeView.setLetterSpacing(0.14f);
+        codeView.setTextIsSelectable(true);
+        codeView.setPadding(dp(8), dp(14), dp(8), dp(14));
+        codeView.setBackground(rounded(PANEL_2, GREEN, 12));
+        box.addView(codeView);
+
+        TextView timerView = text("Expires in 15:00", 12, AMBER, Typeface.BOLD);
+        timerView.setGravity(Gravity.CENTER);
+        timerView.setPadding(0, dp(12), 0, dp(4));
+        box.addView(timerView);
+
+        TextView security = text(
+                "Gunakan kode ini hanya karena kamu memulai login dari Kai Terminal.",
+                11, MUTED, Typeface.NORMAL);
+        security.setGravity(Gravity.CENTER);
+        security.setPadding(0, dp(4), 0, 0);
+        box.addView(security);
+
+        final boolean[] expired = {false};
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Codex device login")
+                .setView(box)
+                .setPositiveButton("OPEN LOGIN", null)
+                .setNeutralButton("COPY CODE", null)
+                .setNegativeButton("CLOSE", null)
+                .create();
+
+        codexAuthDialog = dialog;
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                    .setOnClickListener(v -> {
+                        if (expired[0]) {
+                            dialog.dismiss();
+                            retryCodexLogin(session);
+                            return;
+                        }
+
+                        clipboard.setPrimaryClip(
+                                ClipData.newPlainText("Codex device code", code));
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                        } catch (Exception e) {
+                            Toast.makeText(this,
+                                    "Browser tidak bisa dibuka. URL tetap ada di terminal.",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+
+            dialog.getButton(android.content.DialogInterface.BUTTON_NEUTRAL)
+                    .setOnClickListener(v -> {
+                        clipboard.setPrimaryClip(
+                                ClipData.newPlainText("Codex device code", code));
+                        Toast.makeText(this, "Codex code copied", Toast.LENGTH_SHORT).show();
+                    });
+        });
+
+        dialog.setOnDismissListener(ignored -> {
+            if (codexAuthDialog == dialog) codexAuthDialog = null;
+        });
+
+        dialog.show();
+
+        codexAuthTimer = new CountDownTimer(CODEX_DEVICE_CODE_TTL_MS, 1000L) {
+            @Override
+            public void onTick(long millisUntilFinished) {
+                if (!dialog.isShowing()) {
+                    cancel();
+                    return;
+                }
+                long totalSeconds = Math.max(0L, millisUntilFinished / 1000L);
+                long minutes = totalSeconds / 60L;
+                long seconds = totalSeconds % 60L;
+                timerView.setText(String.format(
+                        Locale.US, "Expires in %02d:%02d", minutes, seconds));
+            }
+
+            @Override
+            public void onFinish() {
+                if (!dialog.isShowing()) return;
+                expired[0] = true;
+                timerView.setText("Code expired");
+                timerView.setTextColor(RED);
+                dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                        .setText("RETRY LOGIN");
+                append(session,
+                        "\n[Codex] device code expired · tap RETRY LOGIN untuk kode baru.\n",
+                        AMBER);
+            }
+        }.start();
+
+        Toast.makeText(this,
+                "Device code copied. Tap OPEN LOGIN.",
+                Toast.LENGTH_LONG).show();
+    }
+
+    private void retryCodexLogin(TerminalSession session) {
+        append(session, "\n[Codex] membuat device code baru…\n", BLUE);
+        if (session.running) cancelCommand(session);
+        waitForCodexIdleAndLogin(session, 0);
+    }
+
+    private void waitForCodexIdleAndLogin(TerminalSession session, int attempt) {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!session.running) {
+                runAgentLogin(session, MODE_CODEX);
+                return;
+            }
+            if (attempt < 12) {
+                waitForCodexIdleAndLogin(session, attempt + 1);
+            } else {
+                append(session,
+                        "[Codex] proses lama belum berhenti. Tekan STOP lalu coba login lagi.\n",
+                        RED);
+            }
+        }, 350L);
+    }
+
+    private void finishCodexAuthUi(TerminalSession session) {
+        if (codexAuthTimer != null) {
+            codexAuthTimer.cancel();
+            codexAuthTimer = null;
+        }
+        if (codexAuthDialog != null && codexAuthDialog.isShowing()) {
+            codexAuthDialog.dismiss();
+        }
+        session.codexAuthCapture.setLength(0);
+        session.codexAuthDialogShown = false;
+        session.codexAuthWaitingShown = false;
+        Toast.makeText(this, "Codex connected", Toast.LENGTH_SHORT).show();
+    }
+
+    private void dismissCodexAuthDialog() {
+        if (codexAuthTimer != null) {
+            codexAuthTimer.cancel();
+            codexAuthTimer = null;
+        }
+        if (codexAuthDialog != null) {
+            try {
+                if (codexAuthDialog.isShowing()) codexAuthDialog.dismiss();
+            } catch (Exception ignored) {}
+            codexAuthDialog = null;
+        }
     }
 
     private void changeDirectory(TerminalSession session, String command) {
@@ -906,7 +1126,7 @@ public class MainActivity extends Activity {
     }
 
     private void showHelp(TerminalSession session) {
-        append(session, "Kai Terminal v3.2 built-ins\n", GREEN);
+        append(session, "Kai Terminal v3.2.2 built-ins\n", GREEN);
         append(session, "  ai                cara pakai mode AI\n", TEXT);
         append(session, "  ai setup          bantuan login pertama\n", TEXT);
         append(session, "  use codex         pindah ke mode Codex\n", TEXT);
@@ -1278,7 +1498,7 @@ public class MainActivity extends Activity {
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 3.2.1\n", GREEN);
+        appendRaw(session, "Kai Terminal 3.2.2\n", GREEN);
         appendRaw(session, "AI-first Android terminal · ARM64 edition\n", MUTED);
         appendRaw(session, "Tap CODEX / OPEN / AGY, lalu langsung ketik pesan\n", BLUE);
         appendRaw(session, "Shell tetap ada via mode SHELL atau prefix !\n\n", MUTED);
@@ -1421,6 +1641,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        dismissCodexAuthDialog();
         for (TerminalSession session : sessions) {
             Process process = session.currentProcess;
             if (process != null) {
