@@ -570,10 +570,7 @@ public class MainActivity extends Activity {
 
                 if (name.equals("opencode")) {
                     String loader = new File(nativeDir, "libmusl-loader.so").getAbsolutePath();
-                    String stdcpp = new File(nativeDir, "libstdcpp.so").getAbsolutePath();
-                    String gcc = new File(nativeDir, "libgcccompat.so").getAbsolutePath();
-                    return "LD_PRELOAD=" + shellQuote(stdcpp + ":" + gcc) + " " +
-                            shellQuote(loader) + " --library-path " + shellQuote(nativeDir) +
+                    return shellQuote(loader) + " --library-path " + shellQuote(nativeDir) +
                             " " + shellQuote(binary) + suffix;
                 }
 
