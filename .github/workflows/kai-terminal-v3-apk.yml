@@ -1,8 +1,8 @@
-name: Build Kai Terminal V3 AI APK
+name: Build Kai Terminal V3.1 AI APK
 
 on:
   push:
-    branches: ["build/kai-terminal-v3"]
+    branches: ["build/kai-terminal-v3.1"]
   workflow_dispatch:
 
 jobs:
@@ -30,71 +30,118 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Download official ARM64 AI CLIs
+      - name: Download Codex and OpenCode
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p app/src/main/jniLibs/arm64-v8a /tmp/kai-ai/codex /tmp/kai-ai/opencode /tmp/kai-ai/agy
+          OUT=app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$OUT" /tmp/kai-ai/codex /tmp/kai-ai/opencode
 
           curl -fL --retry 3 https://github.com/openai/codex/releases/download/rust-v0.158.0/codex-aarch64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz
           tar -xzf /tmp/codex.tar.gz -C /tmp/kai-ai/codex
           CODEX="$(find /tmp/kai-ai/codex -type f -name 'codex*' | head -1)"
-          test -n "$CODEX"
-          cp "$CODEX" app/src/main/jniLibs/arm64-v8a/libcodex.so
+          cp "$CODEX" "$OUT/libcodex.so"
 
           curl -fL --retry 3 https://github.com/anomalyco/opencode/releases/download/v1.18.33/opencode-linux-arm64-musl.tar.gz -o /tmp/opencode.tar.gz
           tar -xzf /tmp/opencode.tar.gz -C /tmp/kai-ai/opencode
           OPENCODE="$(find /tmp/kai-ai/opencode -type f -name 'opencode' | head -1)"
-          test -n "$OPENCODE"
-          cp "$OPENCODE" app/src/main/jniLibs/arm64-v8a/libopencode.so
+          cp "$OPENCODE" "$OUT/libopencode.so"
 
-          curl -fL --retry 3 https://github.com/google-antigravity/antigravity-cli/releases/download/1.2.12/agy_cli_linux_arm64_musl.tar.gz -o /tmp/agy.tar.gz
-          tar -xzf /tmp/agy.tar.gz -C /tmp/kai-ai/agy
-          AGY="$(find /tmp/kai-ai/agy -type f \( -name 'agy' -o -name 'antigravity*' \) | head -1)"
-          test -n "$AGY"
-          cp "$AGY" app/src/main/jniLibs/arm64-v8a/libagy.so
-
-          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
-              set -eux
-              apk add --no-cache libstdc++
-              cp -L /lib/ld-musl-aarch64.so.1 /out/libmusl-loader.so
-              cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
-              cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
-            '
-
-          sudo chown -R "$(id -u):$(id -g)" app/src/main/jniLibs/arm64-v8a
+          docker run --rm --platform linux/arm64 -v "$PWD/$OUT:/out" alpine:3.22 sh -lc '
+            set -eux
+            apk add --no-cache libstdc++
+            cp -L /lib/ld-musl-aarch64.so.1 /out/libmusl-loader.so
+            cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
+            cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
+          '
+          sudo chown -R "$(id -u):$(id -g)" "$OUT"
 
           sudo apt-get update -qq
           sudo apt-get install -y -qq patchelf
-          patchelf --replace-needed libstdc++.so.6 libstdcpp.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libopencode.so
-          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libstdcpp.so
-          echo "OpenCode patched dependencies:"
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so
-          echo "libstdc++ patched dependencies:"
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libstdcpp.so
+          patchelf --replace-needed libstdc++.so.6 libstdcpp.so "$OUT/libopencode.so"
+          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so "$OUT/libopencode.so"
+          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so "$OUT/libstdcpp.so"
 
-          chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
-          file app/src/main/jniLibs/arm64-v8a/*.so
-          du -h app/src/main/jniLibs/arm64-v8a/*.so
-
-      - name: Verify embedded binaries are ARM64
+      - name: Bundle Android-compatible Antigravity runtime
         shell: bash
         run: |
           set -euxo pipefail
-          for f in app/src/main/jniLibs/arm64-v8a/*.so; do
+          OUT=app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$OUT" /tmp/agy
+
+          # Community Android/Termux port tracks the official Google release and
+          # patches VA39 memory assumptions + faccessat2 for Android seccomp.
+          curl -fL --retry 3             https://github.com/wallentx/antigravity-cli-termux/releases/download/v1.2.12/antigravity-termux-standalone.tar.gz             -o /tmp/agy-termux.tar.gz
+          tar -xzf /tmp/agy-termux.tar.gz -C /tmp/agy agy.va39
+          cp /tmp/agy/agy.va39 "$OUT/libagy.so"
+
+          # Static PRoot is only used to bind our generated resolver file onto
+          # /etc/resolv.conf for the glibc Antigravity engine.
+          curl -fL --retry 3             https://raw.githubusercontent.com/proot-me/proot-static-build/master/static/proot-arm64             -o "$OUT/libproot.so"
+
+          # Bundle a compact glibc runtime from Debian ARM64.
+          docker run --rm --platform linux/arm64 -v "$PWD/$OUT:/out" debian:bookworm-slim bash -lc '
+            set -eux
+            apt-get update -qq
+            apt-get install -y -qq libstdc++6
+            cp -L /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 /out/libagyld.so
+            cp -L /lib/aarch64-linux-gnu/libc.so.6 /out/libagyc.so
+            cp -L /lib/aarch64-linux-gnu/libm.so.6 /out/libagym.so
+            cp -L /lib/aarch64-linux-gnu/libpthread.so.0 /out/libagypthread.so
+            cp -L /lib/aarch64-linux-gnu/libdl.so.2 /out/libagydl.so
+            cp -L /lib/aarch64-linux-gnu/librt.so.1 /out/libagyrt.so
+            cp -L /lib/aarch64-linux-gnu/libgcc_s.so.1 /out/libagygcc.so
+            cp -L /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /out/libagystdcpp.so
+          '
+          sudo chown -R "$(id -u):$(id -g)" "$OUT"
+          chmod 755 "$OUT"/*.so
+
+          patch_one() {
+            local f="$1"
+            patchelf --replace-needed libc.so.6 libagyc.so "$f" 2>/dev/null || true
+            patchelf --replace-needed libm.so.6 libagym.so "$f" 2>/dev/null || true
+            patchelf --replace-needed libpthread.so.0 libagypthread.so "$f" 2>/dev/null || true
+            patchelf --replace-needed libdl.so.2 libagydl.so "$f" 2>/dev/null || true
+            patchelf --replace-needed librt.so.1 libagyrt.so "$f" 2>/dev/null || true
+            patchelf --replace-needed libgcc_s.so.1 libagygcc.so "$f" 2>/dev/null || true
+            patchelf --replace-needed libstdc++.so.6 libagystdcpp.so "$f" 2>/dev/null || true
+          }
+
+          patch_one "$OUT/libagy.so"
+          patch_one "$OUT/libagyc.so"
+          patch_one "$OUT/libagym.so"
+          patch_one "$OUT/libagypthread.so"
+          patch_one "$OUT/libagydl.so"
+          patch_one "$OUT/libagyrt.so"
+          patch_one "$OUT/libagygcc.so"
+          patch_one "$OUT/libagystdcpp.so"
+
+          echo "Antigravity NEEDED:"
+          patchelf --print-needed "$OUT/libagy.so" || true
+
+          # Fail if the engine still needs an unbundled standard glibc soname.
+          if patchelf --print-needed "$OUT/libagy.so" | grep -E '^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libgcc_s\.so\.1|libstdc\+\+\.so\.6)$'; then
+            echo "Unpatched Antigravity dependency remains"
+            exit 1
+          fi
+
+      - name: Verify ARM64 binaries and strict CLI smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          OUT=app/src/main/jniLibs/arm64-v8a
+          file "$OUT"/*.so
+          for f in "$OUT"/*.so; do
             readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
           done
 
-      - name: Strict smoke test all three CLIs under ARM64
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
+          docker run --rm --platform linux/arm64             -v "$PWD/$OUT:/ai:ro"             alpine:3.22 sh -lc '
               set -eux
               /ai/libcodex.so --version
               /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
-              /ai/libagy.so --version
+              /ai/libproot.so --version
+              printf "nameserver 8.8.8.8\n" >/tmp/kai-resolv.conf
+              /ai/libproot.so -b /tmp/kai-resolv.conf:/etc/resolv.conf                 /ai/libagyld.so --library-path /ai /ai/libagy.so --version
             '
 
       - name: Set up Gradle 8.9
@@ -102,25 +149,25 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Build V3 APK
+      - name: Build V3.1 APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.0.0-AI.apk
-          sha256sum dist/KaiTerminal-v3.0.0-AI.apk
-          ls -lh dist/KaiTerminal-v3.0.0-AI.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.1.0-AI.apk
+          sha256sum dist/KaiTerminal-v3.1.0-AI.apk
+          ls -lh dist/KaiTerminal-v3.1.0-AI.apk
 
-      - name: Verify APK signature package and bundled runtimes
+      - name: Verify APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.0.0-AI.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.0.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.0.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.1.0-AI.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.1.0-AI.apk | head -25
+          unzip -l dist/KaiTerminal-v3.1.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libproot|libagyld)'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KaiTerminal-v3.0.0-AI
-          path: dist/KaiTerminal-v3.0.0-AI.apk
+          name: KaiTerminal-v3.1.0-AI
+          path: dist/KaiTerminal-v3.1.0-AI.apk
           if-no-files-found: error
