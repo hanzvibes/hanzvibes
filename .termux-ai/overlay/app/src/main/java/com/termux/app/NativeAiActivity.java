@@ -369,6 +369,7 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
 
     private void openSession(TerminalSession session) {
         if (session == null) return;
+        initializeHeadlessSession(session);
         currentSession = session;
         homeScreen.setVisibility(View.GONE);
         workspaceScreen.setVisibility(View.VISIBLE);
