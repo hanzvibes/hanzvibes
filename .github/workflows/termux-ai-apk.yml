@@ -3,9 +3,9 @@ name: Build Termux AI APK
 on:
   push:
     branches:
-      - 'termux-ai/ui-v2'
+      - 'termux-ai/ui-v3-desktop'
     paths:
-      - '.termux-ai/TRIGGER_BUILD'
+      - '.termux-ai/TRIGGER_BUILD_V3'
   workflow_dispatch:
 
 permissions:
@@ -38,8 +38,8 @@ jobs:
         working-directory: termux-src
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_APK_VERSION_TAG: termux-ai-v2-ui
-          TERMUX_APP_VERSION_NAME: 0.118.3-ai.2
+          TERMUX_APK_VERSION_TAG: termux-ai-v3-desktop
+          TERMUX_APP_VERSION_NAME: 0.118.3-ai.3
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Show APK outputs
@@ -48,7 +48,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v6
         with:
-          name: termux-ai-v2-ui-apks
+          name: termux-ai-v3-desktop-apks
           if-no-files-found: error
           retention-days: 7
           path: |
