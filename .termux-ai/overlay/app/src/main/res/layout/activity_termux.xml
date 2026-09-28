@@ -123,19 +123,32 @@
                     app:strokeColor="#272A31"
                     app:strokeWidth="1dp">
 
-                    <com.termux.view.TerminalView
-                        android:id="@+id/terminal_view"
+                    <FrameLayout
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="8dp"
-                        android:defaultFocusHighlightEnabled="false"
-                        android:focusableInTouchMode="true"
-                        android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
-                        android:scrollbars="vertical"
-                        tools:ignore="UnusedAttribute" />
+                        android:layout_height="match_parent">
+
+                        <com.termux.view.TerminalView
+                            android:id="@+id/terminal_view"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:paddingStart="10dp"
+                            android:paddingTop="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingBottom="8dp"
+                            android:defaultFocusHighlightEnabled="false"
+                            android:focusableInTouchMode="true"
+                            android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
+                            android:scrollbars="vertical"
+                            tools:ignore="UnusedAttribute" />
+
+                        <WebView
+                            android:id="@+id/ai_terminal_viewport"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:background="#090A0C"
+                            android:importantForAccessibility="yes"
+                            android:visibility="gone" />
+                    </FrameLayout>
                 </com.google.android.material.card.MaterialCardView>
 
                 <androidx.viewpager.widget.ViewPager
@@ -147,6 +160,7 @@
                     android:visibility="gone" />
 
                 <LinearLayout
+                    android:id="@+id/native_command_composer"
                     android:layout_width="match_parent"
                     android:layout_height="54dp"
                     android:layout_marginTop="8dp"
