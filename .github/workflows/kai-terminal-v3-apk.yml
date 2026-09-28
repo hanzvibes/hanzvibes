@@ -169,7 +169,8 @@ jobs:
               echo "== auth/help entrypoints =="
               codex login --help >/dev/null
               opencode auth --help >/dev/null
-              opencode auth login --help | grep -q -- '--method'
+              opencode auth login --help > /tmp/opencode-auth-login-help.txt
+              grep -F -- '--method' /tmp/opencode-auth-login-help.txt
               agy --help >/dev/null
 
               echo "== multiline paste regression =="
