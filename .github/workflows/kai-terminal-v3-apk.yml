@@ -63,6 +63,17 @@ jobs:
             '
 
           sudo chown -R "$(id -u):$(id -g)" app/src/main/jniLibs/arm64-v8a
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+          patchelf --replace-needed libstdc++.so.6 libstdcpp.so app/src/main/jniLibs/arm64-v8a/libopencode.so
+          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libopencode.so
+          patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libstdcpp.so
+          echo "OpenCode patched dependencies:"
+          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so
+          echo "libstdc++ patched dependencies:"
+          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libstdcpp.so
+
           chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
           file app/src/main/jniLibs/arm64-v8a/*.so
           du -h app/src/main/jniLibs/arm64-v8a/*.so
@@ -82,7 +93,7 @@ jobs:
           docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
               set -eux
               /ai/libcodex.so --version
-              LD_PRELOAD=/ai/libstdcpp.so:/ai/libgcccompat.so /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
+              /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
               /ai/libagy.so --version
             '
 
