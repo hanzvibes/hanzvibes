@@ -55,10 +55,9 @@ jobs:
           cp "$AGY" /tmp/agy-original
 
           # Android compatibility patch: VA39 + replace blocked faccessat2 syscall.
-          curl -fL --retry 3 https://raw.githubusercontent.com/cpdata/antigravity-cli-termux/a909b15eab7c55039d99dd389f618de5f8fb317c/patch_agy_va39.py -o /tmp/patch_agy_va39.py
-          python3 /tmp/patch_agy_va39.py /tmp/agy-original | tee /tmp/agy-patch.log
+          python3 tools/patch_agy_android.py /tmp/agy-original /tmp/agy-android | tee /tmp/agy-patch.log
           grep -Eq 'faccessat2=[1-9][0-9]*' /tmp/agy-patch.log
-          cp /tmp/agy-original.va39 app/src/main/jniLibs/arm64-v8a/libagy.so
+          cp /tmp/agy-android app/src/main/jniLibs/arm64-v8a/libagy.so
 
           # Build musl with Kai Terminal's Android-owned resolver path.
           sudo apt-get update -qq
