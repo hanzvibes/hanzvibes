@@ -34,6 +34,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -96,6 +97,7 @@ public class MainActivity extends Activity {
         final SpannableStringBuilder buffer = new SpannableStringBuilder();
         final ExecutorService executor = Executors.newSingleThreadExecutor();
         volatile Process currentProcess;
+        volatile OutputStream stdin;
         volatile boolean running;
         volatile boolean cancelRequested;
 
@@ -130,7 +132,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v2", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -335,10 +337,15 @@ public class MainActivity extends Activity {
 
     private void submit() {
         TerminalSession session = activeSession();
-        if (session.running) return;
 
         String command = input.getText().toString().trim();
         if (command.isEmpty()) return;
+
+        if (session.running) {
+            sendToRunningProcess(session, command);
+            input.setText("");
+            return;
+        }
 
         input.setText("");
         addHistory(command);
@@ -353,6 +360,26 @@ public class MainActivity extends Activity {
     }
 
     private boolean handleBuiltin(TerminalSession session, String command) {
+        if (command.equals("ai") || command.equals("ai status")) {
+            showAiHub(session);
+            return true;
+        }
+        if (command.equals("ai doctor")) {
+            runAiDoctor(session);
+            return true;
+        }
+        if (command.startsWith("ask-codex ")) {
+            runShell(session, "codex exec " + shellQuote(command.substring(10).trim()));
+            return true;
+        }
+        if (command.startsWith("ask-opencode ")) {
+            runShell(session, "opencode run " + shellQuote(command.substring(13).trim()));
+            return true;
+        }
+        if (command.startsWith("ask-agy ")) {
+            runShell(session, "agy -p " + shellQuote(command.substring(8).trim()));
+            return true;
+        }
         if (command.equals("clear")) {
             clearOutput();
             return true;
@@ -406,10 +433,10 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 2.0.0\n" +
+                    "Kai Terminal 3.0.0\n" +
                     "Local Android shell with persistent multi-session workspace.\n" +
-                    "Commands run through /system/bin/sh inside Android app permissions.\n" +
-                    "No root. No internet permission. Long-running jobs can be cancelled.\n",
+                    "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
+                    "Commands run inside Android app permissions. No root required.\n",
                     TEXT);
             return true;
         }
@@ -432,21 +459,28 @@ public class MainActivity extends Activity {
         session.executor.execute(() -> {
             int exitCode = -1;
             try {
-                ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", command);
+                String expandedCommand = expandBundledCli(command);
+                ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", expandedCommand);
                 pb.directory(session.currentDir);
                 pb.redirectErrorStream(true);
                 pb.environment().put("HOME", getFilesDir().getAbsolutePath());
                 pb.environment().put("TMPDIR", getCacheDir().getAbsolutePath());
-                pb.environment().put("TERM", "xterm-256color");
+                pb.environment().put("TERM", "dumb");
+                pb.environment().put("NO_COLOR", "1");
+                pb.environment().put("CLICOLOR", "0");
+                pb.environment().put("SHELL", "/system/bin/sh");
+                pb.environment().put("PATH",
+                        getApplicationInfo().nativeLibraryDir + ":/system/bin:/system/xbin");
 
                 Process process = pb.start();
                 session.currentProcess = process;
+                session.stdin = process.getOutputStream();
 
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream()))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
-                        final String chunk = line + "\n";
+                        final String chunk = stripAnsi(line) + "\n";
                         runOnUiThread(() -> append(session, chunk, TEXT));
                     }
                 }
@@ -460,6 +494,7 @@ public class MainActivity extends Activity {
                 int code = exitCode;
                 boolean cancelled = session.cancelRequested;
                 session.currentProcess = null;
+                session.stdin = null;
                 session.running = false;
                 session.cancelRequested = false;
 
@@ -489,6 +524,12 @@ public class MainActivity extends Activity {
         session.cancelRequested = true;
         append(session, "^C\n", AMBER);
         Process process = session.currentProcess;
+        try {
+            if (session.stdin != null) {
+                session.stdin.write(3);
+                session.stdin.flush();
+            }
+        } catch (Exception ignored) {}
         if (process != null) {
             try {
                 process.destroy();
@@ -496,6 +537,91 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
         refreshAll();
+    }
+
+    private void sendToRunningProcess(TerminalSession session, String line) {
+        try {
+            OutputStream stream = session.stdin;
+            if (stream == null) {
+                append(session, "[stdin unavailable]\n", RED);
+                return;
+            }
+            stream.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            stream.flush();
+            append(session, "› " + line + "\n", MUTED);
+        } catch (Exception e) {
+            append(session, "[stdin error: " + e.getMessage() + "]\n", RED);
+        }
+    }
+
+    private String expandBundledCli(String command) {
+        String trimmed = command.trim();
+        String[][] mappings = new String[][]{
+                {"opencode", "libopencode.so"},
+                {"codex", "libcodex.so"},
+                {"agy", "libagy.so"}
+        };
+        for (String[] mapping : mappings) {
+            String name = mapping[0];
+            if (trimmed.equals(name) || trimmed.startsWith(name + " ")) {
+                String suffix = trimmed.substring(name.length());
+                return shellQuote(new File(getApplicationInfo().nativeLibraryDir,
+                        mapping[1]).getAbsolutePath()) + suffix;
+            }
+        }
+        return command;
+    }
+
+    private String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
+    }
+
+    private void showAiHub(TerminalSession session) {
+        append(session, "AI CLI HUB · BUILT-IN\n", GREEN);
+        append(session, "  opencode   OpenCode CLI (ARM64 musl)\n", TEXT);
+        append(session, "  codex      OpenAI Codex CLI (ARM64 musl)\n", TEXT);
+        append(session, "  agy        Google Antigravity CLI (ARM64 musl)\n\n", TEXT);
+        append(session, "Quick one-shot usage:\n", BLUE);
+        append(session, "  ask-opencode Explain this folder\n", TEXT);
+        append(session, "  ask-codex Review this project\n", TEXT);
+        append(session, "  ask-agy Find the bug in this code\n\n", TEXT);
+        append(session, "Native commands:\n", BLUE);
+        append(session, "  opencode --version\n", TEXT);
+        append(session, "  opencode run \"Explain this repository\"\n", TEXT);
+        append(session, "  codex --version\n", TEXT);
+        append(session, "  codex exec \"Explain this repository\"\n", TEXT);
+        append(session, "  agy --version\n", TEXT);
+        append(session, "  agy -p \"Explain this repository\"\n\n", TEXT);
+        append(session, "Run ai doctor to verify the bundled executables.\n", MUTED);
+    }
+
+    private void runAiDoctor(TerminalSession session) {
+        append(session, "AI Doctor\n", GREEN);
+        String[][] binaries = new String[][]{
+                {"OpenCode", "libopencode.so"},
+                {"Codex", "libcodex.so"},
+                {"Antigravity", "libagy.so"}
+        };
+        for (String[] binary : binaries) {
+            File file = new File(getApplicationInfo().nativeLibraryDir, binary[1]);
+            boolean ready = file.exists() && file.canExecute();
+            append(session,
+                    "  " + binary[0] + ": " +
+                            (ready ? "READY" : "MISSING") +
+                            " · " + file.getAbsolutePath() + "\n",
+                    ready ? GREEN : RED);
+        }
+        append(session, "  ABI: " + android.os.Build.SUPPORTED_ABIS[0] + "\n", TEXT);
+        append(session, "  Network: Android INTERNET permission enabled\n", TEXT);
+        append(session, "  Shell: /system/bin/sh\n", TEXT);
+    }
+
+    private String stripAnsi(String value) {
+        if (value == null) return "";
+        return value
+                .replaceAll("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "")
+                .replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "")
+                .replace("\r", "");
     }
 
     private void changeDirectory(TerminalSession session, String command) {
@@ -558,7 +684,15 @@ public class MainActivity extends Activity {
     }
 
     private void showHelp(TerminalSession session) {
-        append(session, "Kai Terminal v2 built-ins\n", GREEN);
+        append(session, "Kai Terminal v3 built-ins\n", GREEN);
+        append(session, "  ai                show built-in AI CLI hub\n", TEXT);
+        append(session, "  ai doctor         verify bundled AI binaries\n", TEXT);
+        append(session, "  codex ...         OpenAI Codex CLI\n", TEXT);
+        append(session, "  opencode ...      OpenCode CLI\n", TEXT);
+        append(session, "  agy ...           Google Antigravity CLI\n", TEXT);
+        append(session, "  ask-codex <text>  one-shot Codex prompt\n", TEXT);
+        append(session, "  ask-opencode <t>  one-shot OpenCode prompt\n", TEXT);
+        append(session, "  ask-agy <text>    one-shot Antigravity prompt\n", TEXT);
         append(session, "  help              command reference\n", TEXT);
         append(session, "  clear             clear active session output\n", TEXT);
         append(session, "  pwd               print working directory\n", TEXT);
@@ -684,7 +818,8 @@ public class MainActivity extends Activity {
             candidates.addAll(Arrays.asList(COMMON_COMMANDS));
             candidates.addAll(Arrays.asList(
                     "help", "clear", "history", "home", "files", "sessions",
-                    "new", "close", "session", "rename", "about", "exit"
+                    "new", "close", "session", "rename", "about", "exit",
+                    "ai", "opencode", "codex", "agy", "ask-opencode", "ask-codex", "ask-agy"
             ));
         }
 
@@ -870,9 +1005,10 @@ public class MainActivity extends Activity {
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 2.0.0\n", GREEN);
-        appendRaw(session, "Persistent multi-session Android shell\n", MUTED);
-        appendRaw(session, "TAB autocomplete · CTRL-C cancel · type 'help'\n\n", MUTED);
+        appendRaw(session, "Kai Terminal 3.0.0\n", GREEN);
+        appendRaw(session, "AI-native Android shell · ARM64 edition\n", MUTED);
+        appendRaw(session, "Built in: opencode · codex · agy\n", BLUE);
+        appendRaw(session, "TAB autocomplete · CTRL-C cancel · type 'ai' or 'help'\n\n", MUTED);
     }
 
     private void clearOutput() {
