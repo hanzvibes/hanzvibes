@@ -1,8 +1,8 @@
-name: Build Kai Terminal V3.1 AI APK
+name: Build Kai Terminal V3.2 AI APK
 
 on:
   push:
-    branches: ["build/kai-terminal-v3-1"]
+    branches: ["build/kai-terminal-v3-2"]
   workflow_dispatch:
 
 jobs:
@@ -113,26 +113,38 @@ jobs:
               /ai/libagy.so --help >/dev/null
             '
 
+      - name: Verify V3.2 UX regression guards
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SRC=app/src/main/java/com/kai/terminal/MainActivity.java
+          grep -F 'ChatGPT Pro/Plus (headless)' "$SRC"
+          grep -F 'codex login --device-auth' "$SRC"
+          grep -F 'modeRow' "$SRC"
+          grep -F 'byte[] readBuffer = new byte[2048]' "$SRC"
+          grep -F 'command.startsWith("!")' "$SRC"
+          grep -F 'Ask " + modeLabel(session.mode)' "$SRC"
+
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: Build V3.1 APK
+      - name: Build V3.2 APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.1.0-AI.apk
-          sha256sum dist/KaiTerminal-v3.1.0-AI.apk
-          ls -lh dist/KaiTerminal-v3.1.0-AI.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.2.0-AI.apk
+          sha256sum dist/KaiTerminal-v3.2.0-AI.apk
+          ls -lh dist/KaiTerminal-v3.2.0-AI.apk
 
       - name: Verify final APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.1.0-AI.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.1.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.1.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.2.0-AI.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.2.0-AI.apk | head -25
+          unzip -l dist/KaiTerminal-v3.2.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
 
       - name: Smoke test packaged APK binaries and multiline wrapper
         shell: bash
@@ -140,7 +152,7 @@ jobs:
           set -euxo pipefail
           rm -rf /tmp/kai-apk-smoke
           mkdir -p /tmp/kai-apk-smoke
-          unzip -q dist/KaiTerminal-v3.1.0-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
+          unzip -q dist/KaiTerminal-v3.2.0-AI.apk 'lib/arm64-v8a/*' -d /tmp/kai-apk-smoke
           chmod 755 /tmp/kai-apk-smoke/lib/arm64-v8a/*.so
 
           docker run --rm --platform linux/arm64             -v "/tmp/kai-apk-smoke/lib/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
@@ -157,6 +169,7 @@ jobs:
               echo "== auth/help entrypoints =="
               codex login --help >/dev/null
               opencode auth --help >/dev/null
+              opencode auth login --help | grep -q -- '--method'
               agy --help >/dev/null
 
               echo "== multiline paste regression =="
@@ -179,12 +192,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          unzip -t dist/KaiTerminal-v3.1.0-AI.apk >/tmp/apk-integrity.txt
+          unzip -t dist/KaiTerminal-v3.2.0-AI.apk >/tmp/apk-integrity.txt
           grep -F 'No errors detected in compressed data' /tmp/apk-integrity.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KaiTerminal-v3.1.0-AI
-          path: dist/KaiTerminal-v3.1.0-AI.apk
+          name: KaiTerminal-v3.2.0-AI
+          path: dist/KaiTerminal-v3.2.0-AI.apk
           if-no-files-found: error

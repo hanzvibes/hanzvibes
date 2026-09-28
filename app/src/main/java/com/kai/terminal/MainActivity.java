@@ -14,6 +14,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.Editable;
+import android.text.method.LinkMovementMethod;
+import android.text.util.Linkify;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
@@ -72,16 +74,23 @@ public class MainActivity extends Activity {
     private static final String PREF_SESSIONS = "sessions_json";
     private static final String PREF_ACTIVE = "active_session";
 
+    private static final String MODE_SHELL = "shell";
+    private static final String MODE_CODEX = "codex";
+    private static final String MODE_OPENCODE = "opencode";
+    private static final String MODE_AGY = "agy";
+
     private final List<TerminalSession> sessions = new ArrayList<>();
     private final List<String> history = new ArrayList<>();
 
     private SharedPreferences prefs;
     private LinearLayout tabsRow;
+    private LinearLayout modeRow;
     private TextView output;
     private ScrollView scroll;
     private EditText input;
     private TextView cwdLabel;
     private TextView statusLabel;
+    private TextView promptLabel;
     private Button runButton;
     private int activeIndex = 0;
     private int historyIndex = 0;
@@ -98,6 +107,7 @@ public class MainActivity extends Activity {
         String name;
         File currentDir;
         String draft = "";
+        String mode = MODE_CODEX;
         final SpannableStringBuilder buffer = new SpannableStringBuilder();
         final ExecutorService executor = Executors.newSingleThreadExecutor();
         volatile Process currentProcess;
@@ -137,7 +147,7 @@ public class MainActivity extends Activity {
         LinearLayout titleStack = new LinearLayout(this);
         titleStack.setOrientation(LinearLayout.VERTICAL);
 
-        TextView title = text("KAI TERMINAL  v3.1 · AI", 15, GREEN, Typeface.BOLD);
+        TextView title = text("KAI TERMINAL  v3.2 · AI", 15, GREEN, Typeface.BOLD);
         title.setLetterSpacing(0.12f);
         titleStack.addView(title);
 
@@ -159,6 +169,14 @@ public class MainActivity extends Activity {
         tabsScroll.addView(tabsRow);
         root.addView(tabsScroll);
 
+        HorizontalScrollView modeScroll = new HorizontalScrollView(this);
+        modeScroll.setHorizontalScrollBarEnabled(false);
+        modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setPadding(0, 0, 0, dp(8));
+        modeScroll.addView(modeRow);
+        root.addView(modeScroll);
+
         LinearLayout pathBar = new LinearLayout(this);
         pathBar.setOrientation(LinearLayout.HORIZONTAL);
         pathBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -178,6 +196,9 @@ public class MainActivity extends Activity {
 
         output = text("", 13, TEXT, Typeface.NORMAL);
         output.setTextIsSelectable(true);
+        output.setAutoLinkMask(Linkify.WEB_URLS);
+        output.setLinksClickable(true);
+        output.setMovementMethod(LinkMovementMethod.getInstance());
         output.setLineSpacing(0f, 1.12f);
         output.setPadding(dp(12), dp(12), dp(12), dp(12));
 
@@ -219,9 +240,9 @@ public class MainActivity extends Activity {
         commandRow.setPadding(dp(10), dp(2), dp(6), dp(2));
         commandRow.setBackground(rounded(PANEL_2, BORDER, 12));
 
-        TextView prompt = text("❯", 18, GREEN, Typeface.BOLD);
-        prompt.setPadding(0, 0, dp(8), 0);
-        commandRow.addView(prompt);
+        promptLabel = text("›", 18, GREEN, Typeface.BOLD);
+        promptLabel.setPadding(0, 0, dp(8), 0);
+        commandRow.addView(promptLabel);
 
         input = new EditText(this);
         input.setSingleLine(true);
@@ -280,6 +301,7 @@ public class MainActivity extends Activity {
                 String persisted = o.optString("buffer", "");
                 if (!persisted.isEmpty()) appendRaw(session, persisted, MUTED);
                 session.draft = o.optString("draft", "");
+                session.mode = normalizeMode(o.optString("mode", MODE_CODEX));
                 sessions.add(session);
             }
         } catch (Exception ignored) {}
@@ -353,6 +375,7 @@ public class MainActivity extends Activity {
                 o.put("name", session.name);
                 o.put("cwd", session.currentDir.getAbsolutePath());
                 o.put("draft", session.draft);
+                o.put("mode", session.mode);
                 String plain = session.buffer.toString();
                 if (plain.length() > PERSIST_BUFFER) {
                     plain = "[older output trimmed after restart]\n" +
@@ -390,10 +413,26 @@ public class MainActivity extends Activity {
 
         input.setText("");
         addHistory(command);
-        append(session, "❯ " + command + "\n", GREEN);
+
+        if (command.startsWith("!")) {
+            String shellCommand = command.substring(1).trim();
+            if (shellCommand.isEmpty()) return;
+            append(session, "$ " + shellCommand + "\n", GREEN);
+            runShell(session, shellCommand);
+            return;
+        }
+
+        append(session,
+                (MODE_SHELL.equals(session.mode) ? "❯ " : "YOU › ") + command + "\n",
+                MODE_SHELL.equals(session.mode) ? GREEN : BLUE);
 
         if (handleBuiltin(session, command)) {
             persistState();
+            return;
+        }
+
+        if (!MODE_SHELL.equals(session.mode)) {
+            runAgentPrompt(session, session.mode, command);
             return;
         }
 
@@ -401,24 +440,40 @@ public class MainActivity extends Activity {
     }
 
     private boolean handleBuiltin(TerminalSession session, String command) {
-        if (command.equals("ai") || command.equals("ai status")) {
+        if (command.equals("ai")) {
             showAiHub(session);
             return true;
         }
-        if (command.equals("ai doctor")) {
+        if (command.equals("ai status") || command.equals("ai doctor")) {
             runAiDoctor(session);
             return true;
         }
+        if (command.equals("ai setup")) {
+            showAiSetup(session);
+            return true;
+        }
+        if (command.equals("mode")) {
+            append(session, "Current mode: " + modeLabel(session.mode) + "\n", BLUE);
+            return true;
+        }
+        if (command.startsWith("use ")) {
+            setMode(session, command.substring(4).trim());
+            return true;
+        }
+        if (command.startsWith("login ")) {
+            runAgentLogin(session, normalizeMode(command.substring(6).trim()));
+            return true;
+        }
         if (command.startsWith("ask-codex ")) {
-            runShell(session, "codex exec " + shellQuote(command.substring(10).trim()));
+            runAgentPrompt(session, MODE_CODEX, command.substring(10).trim());
             return true;
         }
         if (command.startsWith("ask-opencode ")) {
-            runShell(session, "opencode run " + shellQuote(command.substring(13).trim()));
+            runAgentPrompt(session, MODE_OPENCODE, command.substring(13).trim());
             return true;
         }
         if (command.startsWith("ask-agy ")) {
-            runShell(session, "agy -p " + shellQuote(command.substring(8).trim()));
+            runAgentPrompt(session, MODE_AGY, command.substring(8).trim());
             return true;
         }
         if (command.equals("clear")) {
@@ -474,10 +529,10 @@ public class MainActivity extends Activity {
         }
         if (command.equals("about")) {
             append(session,
-                    "Kai Terminal 3.1.0\n" +
-                    "Local Android shell with persistent multi-session workspace.\n" +
+                    "Kai Terminal 3.2.0\n" +
+                    "AI-first Android terminal with persistent multi-session workspace.\n" +
                     "Built-in AI CLIs: OpenCode, OpenAI Codex CLI, Google Antigravity CLI.\n" +
-                    "Commands run inside Android app permissions. No root required.\n",
+                    "Mode AI accepts plain text; prefix ! for shell commands. No root required.\n",
                     TEXT);
             return true;
         }
@@ -521,11 +576,24 @@ public class MainActivity extends Activity {
                 session.currentProcess = process;
                 session.stdin = process.getOutputStream();
 
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        final String chunk = stripAnsi(line) + "\n";
+                Thread waitingHint = new Thread(() -> {
+                    try {
+                        Thread.sleep(18000);
+                        if (session.running && !session.cancelRequested) {
+                            runOnUiThread(() -> append(session,
+                                    "\n[masih berjalan · jika ada link login di atas, tap link itu · STOP untuk batal]\n",
+                                    AMBER));
+                        }
+                    } catch (InterruptedException ignored) {}
+                }, "kai-running-hint");
+                waitingHint.start();
+
+                byte[] readBuffer = new byte[2048];
+                int read;
+                while ((read = process.getInputStream().read(readBuffer)) != -1) {
+                    final String chunk = stripAnsi(new String(
+                            readBuffer, 0, read, java.nio.charset.StandardCharsets.UTF_8));
+                    if (!chunk.isEmpty()) {
                         runOnUiThread(() -> append(session, chunk, TEXT));
                     }
                 }
@@ -609,7 +677,103 @@ public class MainActivity extends Activity {
         return "codex() { " + codex + " \"$@\"; }\n" +
                 "opencode() { " + loader + " --library-path " + shellQuote(nativeDir) +
                 " " + opencode + " \"$@\"; }\n" +
-                "agy() { " + agy + " \"$@\"; }\n";
+                "agy() { SSH_CONNECTION='kai-terminal 1 127.0.0.1 22' " +
+                "DBUS_SESSION_BUS_ADDRESS='unix:path=/dev/null' " + agy + " \"$@\"; }\n";
+    }
+
+    private String normalizeMode(String value) {
+        if (value == null) return MODE_CODEX;
+        String v = value.trim().toLowerCase(Locale.ROOT);
+        if (v.equals("shell") || v.equals("terminal") || v.equals("sh")) return MODE_SHELL;
+        if (v.equals("codex") || v.equals("openai")) return MODE_CODEX;
+        if (v.equals("opencode") || v.equals("open") || v.equals("oc")) return MODE_OPENCODE;
+        if (v.equals("agy") || v.equals("antigravity") || v.equals("google")) return MODE_AGY;
+        return MODE_CODEX;
+    }
+
+    private String modeLabel(String mode) {
+        if (MODE_SHELL.equals(mode)) return "SHELL";
+        if (MODE_OPENCODE.equals(mode)) return "OPENCODE";
+        if (MODE_AGY.equals(mode)) return "ANTIGRAVITY";
+        return "CODEX";
+    }
+
+    private void setMode(TerminalSession session, String requested) {
+        String mode = normalizeMode(requested);
+        session.mode = mode;
+        append(session, "Mode → " + modeLabel(mode) + "\n", GREEN);
+        refreshAll();
+        persistState();
+    }
+
+    private void runAgentLogin(TerminalSession session, String mode) {
+        if (MODE_SHELL.equals(mode)) {
+            append(session, "Shell tidak membutuhkan login.\n", MUTED);
+            return;
+        }
+        session.mode = mode;
+        refreshAll();
+
+        if (MODE_CODEX.equals(mode)) {
+            append(session, "Codex login · buka link/kode yang muncul.\n", BLUE);
+            runShell(session, "codex login status >/dev/null 2>&1 || codex login --device-auth");
+            return;
+        }
+        if (MODE_OPENCODE.equals(mode)) {
+            append(session, "OpenCode login · memakai ChatGPT Plus/Pro headless device flow.\n", BLUE);
+            runShell(session,
+                    "opencode auth login --provider openai --method " +
+                    shellQuote("ChatGPT Pro/Plus (headless)"));
+            return;
+        }
+
+        append(session, "Antigravity login · buka URL Google yang muncul lalu paste kode jika diminta.\n", BLUE);
+        runShell(session, "agy -p " + shellQuote("Reply with only: login complete"));
+    }
+
+    private void runAgentPrompt(TerminalSession session, String mode, String prompt) {
+        if (prompt == null || prompt.trim().isEmpty()) return;
+        mode = normalizeMode(mode);
+        session.mode = mode;
+        refreshAll();
+
+        String q = shellQuote(prompt.trim());
+        if (MODE_CODEX.equals(mode)) {
+            runShell(session,
+                    "if ! codex login status >/dev/null 2>&1; then " +
+                    "echo '[Codex] login pertama kali diperlukan'; " +
+                    "codex login --device-auth || exit $?; fi; " +
+                    "codex exec " + q);
+            return;
+        }
+
+        if (MODE_OPENCODE.equals(mode)) {
+            runShell(session,
+                    "AUTH_JSON=\"$(opencode auth list --format json 2>/dev/null || true)\"; " +
+                    "case \"$AUTH_JSON\" in ''|'[]'|'{}') " +
+                    "echo '[OpenCode] menghubungkan ChatGPT Plus/Pro...'; " +
+                    "opencode auth login --provider openai --method " +
+                    shellQuote("ChatGPT Pro/Plus (headless)") +
+                    " || exit $?;; esac; " +
+                    "opencode run --standalone " + q);
+            return;
+        }
+
+        if (MODE_AGY.equals(mode)) {
+            runShell(session, "agy -p " + q);
+            return;
+        }
+
+        runShell(session, prompt);
+    }
+
+    private void showAiSetup(TerminalSession session) {
+        append(session, "AI FIRST-RUN SETUP\n", GREEN);
+        append(session, "  login codex      ChatGPT device login\n", TEXT);
+        append(session, "  login opencode   ChatGPT Plus/Pro headless login\n", TEXT);
+        append(session, "  login agy        Google Antigravity login\n\n", TEXT);
+        append(session, "Tip: cukup tap mode CODEX / OPEN / AGY lalu ketik pesan.\n", BLUE);
+        append(session, "Jika belum login, Kai Terminal akan memulai login otomatis.\n", MUTED);
     }
 
     private String shellQuote(String value) {
@@ -617,22 +781,12 @@ public class MainActivity extends Activity {
     }
 
     private void showAiHub(TerminalSession session) {
-        append(session, "AI CLI HUB · BUILT-IN\n", GREEN);
-        append(session, "  opencode   OpenCode CLI (ARM64 musl)\n", TEXT);
-        append(session, "  codex      OpenAI Codex CLI (ARM64 musl)\n", TEXT);
-        append(session, "  agy        Google Antigravity CLI (ARM64 musl)\n\n", TEXT);
-        append(session, "Quick one-shot usage:\n", BLUE);
-        append(session, "  ask-opencode Explain this folder\n", TEXT);
-        append(session, "  ask-codex Review this project\n", TEXT);
-        append(session, "  ask-agy Find the bug in this code\n\n", TEXT);
-        append(session, "Native commands:\n", BLUE);
-        append(session, "  opencode --version\n", TEXT);
-        append(session, "  opencode run \"Explain this repository\"\n", TEXT);
-        append(session, "  codex --version\n", TEXT);
-        append(session, "  codex exec \"Explain this repository\"\n", TEXT);
-        append(session, "  agy --version\n", TEXT);
-        append(session, "  agy -p \"Explain this repository\"\n\n", TEXT);
-        append(session, "Run ai doctor to verify the bundled executables.\n", MUTED);
+        append(session, "AI HUB · READY TO USE\n", GREEN);
+        append(session, "Tap salah satu mode: CODEX · OPEN · AGY\n", BLUE);
+        append(session, "Lalu langsung ketik pesan biasa, contoh: halo\n\n", TEXT);
+        append(session, "Login pertama kali akan dijalankan otomatis jika diperlukan.\n", MUTED);
+        append(session, "Shell command saat mode AI: awali dengan !  contoh: !ls -la\n", MUTED);
+        append(session, "Manual: ai setup · ai doctor · login codex/opencode/agy\n", MUTED);
     }
 
     private void runAiDoctor(TerminalSession session) {
@@ -649,7 +803,7 @@ public class MainActivity extends Activity {
         return value
                 .replaceAll("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "")
                 .replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "")
-                .replace("\r", "");
+                .replace("\r", "\n");
     }
 
     private void changeDirectory(TerminalSession session, String command) {
@@ -712,8 +866,15 @@ public class MainActivity extends Activity {
     }
 
     private void showHelp(TerminalSession session) {
-        append(session, "Kai Terminal v3 built-ins\n", GREEN);
-        append(session, "  ai                show built-in AI CLI hub\n", TEXT);
+        append(session, "Kai Terminal v3.2 built-ins\n", GREEN);
+        append(session, "  ai                cara pakai mode AI\n", TEXT);
+        append(session, "  ai setup          bantuan login pertama\n", TEXT);
+        append(session, "  use codex         pindah ke mode Codex\n", TEXT);
+        append(session, "  use opencode      pindah ke mode OpenCode\n", TEXT);
+        append(session, "  use agy           pindah ke mode Antigravity\n", TEXT);
+        append(session, "  use shell         kembali ke terminal shell\n", TEXT);
+        append(session, "  login <agent>     login manual bila diperlukan\n", TEXT);
+        append(session, "  !<command>        jalankan shell saat mode AI\n", TEXT);
         append(session, "  ai doctor         verify bundled AI binaries\n", TEXT);
         append(session, "  codex ...         OpenAI Codex CLI\n", TEXT);
         append(session, "  opencode ...      OpenCode CLI\n", TEXT);
@@ -736,7 +897,7 @@ public class MainActivity extends Activity {
         append(session, "  about             runtime information\n", TEXT);
         append(session, "  exit              close Kai Terminal\n\n", TEXT);
 
-        append(session, "V2 controls\n", BLUE);
+        append(session, "Controls\n", BLUE);
         append(session, "  TAB       autocomplete command/file names\n", TEXT);
         append(session, "  CTRL-C    terminate the active command\n", TEXT);
         append(session, "  ↑ / ↓     browse persistent history\n", TEXT);
@@ -847,7 +1008,9 @@ public class MainActivity extends Activity {
             candidates.addAll(Arrays.asList(
                     "help", "clear", "history", "home", "files", "sessions",
                     "new", "close", "session", "rename", "about", "exit",
-                    "ai", "opencode", "codex", "agy", "ask-opencode", "ask-codex", "ask-agy"
+                    "ai", "ai setup", "ai doctor", "use shell", "use codex", "use opencode",
+                    "use agy", "login codex", "login opencode", "login agy",
+                    "opencode", "codex", "agy", "ask-opencode", "ask-codex", "ask-agy"
             ));
         }
 
@@ -930,6 +1093,7 @@ public class MainActivity extends Activity {
                 "S" + nextId,
                 activeSession().currentDir
         );
+        session.mode = activeSession().mode;
         sessions.add(session);
         printBanner(session);
 
@@ -1001,6 +1165,43 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void rebuildModeBar() {
+        if (modeRow == null || sessions.isEmpty()) return;
+        modeRow.removeAllViews();
+        TerminalSession session = activeSession();
+
+        String[][] modes = new String[][]{
+                {MODE_SHELL, "SHELL"},
+                {MODE_CODEX, "CODEX"},
+                {MODE_OPENCODE, "OPEN"},
+                {MODE_AGY, "AGY"}
+        };
+
+        for (String[] entry : modes) {
+            String mode = entry[0];
+            boolean active = mode.equals(session.mode);
+            Button b = new Button(this);
+            b.setText(entry[1]);
+            b.setTextSize(10f);
+            b.setTypeface(Typeface.MONOSPACE, active ? Typeface.BOLD : Typeface.NORMAL);
+            b.setTextColor(active ? BG : TEXT);
+            b.setAllCaps(false);
+            b.setMinWidth(0);
+            b.setMinimumWidth(0);
+            b.setMinHeight(0);
+            b.setMinimumHeight(0);
+            b.setPadding(dp(13), dp(7), dp(13), dp(7));
+            b.setBackground(rounded(active ? GREEN : PANEL_2, active ? GREEN : BORDER, 16));
+            b.setOnClickListener(v -> setMode(activeSession(), mode));
+
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            p.setMargins(0, 0, dp(6), 0);
+            modeRow.addView(b, p);
+        }
+    }
+
     private void refreshAll() {
         if (sessions.isEmpty() || output == null) return;
         TerminalSession session = activeSession();
@@ -1012,11 +1213,15 @@ public class MainActivity extends Activity {
             input.setSelection(input.length());
         }
 
-        runButton.setText(session.running ? "STOP" : "RUN");
+        boolean shellMode = MODE_SHELL.equals(session.mode);
+        runButton.setText(session.running ? "STOP" : (shellMode ? "RUN" : "SEND"));
         runButton.setTextColor(session.running ? RED : GREEN);
         runButton.setBackground(rounded(PANEL_2, session.running ? RED : GREEN, 10));
+        promptLabel.setText(shellMode ? "$" : "›");
+        input.setHint(shellMode ? "command…" : "Ask " + modeLabel(session.mode) + "…");
 
         rebuildTabs();
+        rebuildModeBar();
         updateStatus();
         scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
     }
@@ -1026,17 +1231,17 @@ public class MainActivity extends Activity {
         int running = 0;
         for (TerminalSession s : sessions) if (s.running) running++;
         statusLabel.setText(
-                "LOCAL SHELL  ·  " +
+                modeLabel(activeSession().mode) + "  ·  " +
                 sessions.size() + (sessions.size() == 1 ? " SESSION" : " SESSIONS") +
                 "  ·  " + (running == 0 ? "READY" : running + " RUNNING")
         );
     }
 
     private void printBanner(TerminalSession session) {
-        appendRaw(session, "Kai Terminal 3.1.0\n", GREEN);
-        appendRaw(session, "AI-native Android shell · ARM64 edition\n", MUTED);
-        appendRaw(session, "Built in: opencode · codex · agy\n", BLUE);
-        appendRaw(session, "TAB autocomplete · CTRL-C cancel · type 'ai' or 'help'\n\n", MUTED);
+        appendRaw(session, "Kai Terminal 3.2.0\n", GREEN);
+        appendRaw(session, "AI-first Android terminal · ARM64 edition\n", MUTED);
+        appendRaw(session, "Tap CODEX / OPEN / AGY, lalu langsung ketik pesan\n", BLUE);
+        appendRaw(session, "Shell tetap ada via mode SHELL atau prefix !\n\n", MUTED);
     }
 
     private void clearOutput() {
