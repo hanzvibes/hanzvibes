@@ -169,7 +169,7 @@ jobs:
               echo "== auth/help entrypoints =="
               codex login --help >/dev/null
               opencode auth --help >/dev/null
-              opencode auth login --help > /tmp/opencode-auth-login-help.txt
+              opencode auth login --help > /tmp/opencode-auth-login-help.txt 2>&1
               grep -F -- '--method' /tmp/opencode-auth-login-help.txt
               agy --help >/dev/null
 
