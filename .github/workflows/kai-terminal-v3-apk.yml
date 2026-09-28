@@ -1,8 +1,8 @@
-name: Build Kai Terminal V3 AI APK
+name: Build Kai Terminal V3.1 AI APK
 
 on:
   push:
-    branches: ["build/kai-terminal-v3"]
+    branches: ["build/kai-terminal-v3-1"]
   workflow_dispatch:
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Download official ARM64 AI CLIs
+      - name: Download and patch official ARM64 AI CLIs
         shell: bash
         run: |
           set -euxo pipefail
@@ -52,49 +52,66 @@ jobs:
           tar -xzf /tmp/agy.tar.gz -C /tmp/kai-ai/agy
           AGY="$(find /tmp/kai-ai/agy -type f \( -name 'agy' -o -name 'antigravity*' \) | head -1)"
           test -n "$AGY"
-          cp "$AGY" app/src/main/jniLibs/arm64-v8a/libagy.so
+          cp "$AGY" /tmp/agy-original
 
-          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
+          # Android compatibility patch: VA39 + replace blocked faccessat2 syscall.
+          curl -fL --retry 3 https://raw.githubusercontent.com/cpdata/antigravity-cli-termux/a909b15eab7c55039d99dd389f618de5f8fb317c/patch_agy_va39.py -o /tmp/patch_agy_va39.py
+          python3 /tmp/patch_agy_va39.py /tmp/agy-original | tee /tmp/agy-patch.log
+          grep -Eq 'faccessat2=[1-9][0-9]*' /tmp/agy-patch.log
+          cp /tmp/agy-original.va39 app/src/main/jniLibs/arm64-v8a/libagy.so
+
+          # Build musl with Kai Terminal's Android-owned resolver path.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu make patchelf
+          curl -fL --retry 3 https://musl.libc.org/releases/musl-1.2.5.tar.gz -o /tmp/musl.tar.gz
+          echo "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  /tmp/musl.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/musl.tar.gz -C /tmp
+          sed -i 's|"/etc/resolv.conf"|"/data/data/com.kai.terminal/files/etc/resolv.conf"|' /tmp/musl-1.2.5/src/network/resolvconf.c
+          grep -Fq '/data/data/com.kai.terminal/files/etc/resolv.conf' /tmp/musl-1.2.5/src/network/resolvconf.c
+          (cd /tmp/musl-1.2.5 && CC=aarch64-linux-gnu-gcc ./configure)
+          make -C /tmp/musl-1.2.5 CC=aarch64-linux-gnu-gcc -j2
+          cp /tmp/musl-1.2.5/lib/libc.so app/src/main/jniLibs/arm64-v8a/libmusl-loader.so
+
+          # Bundle OpenCode's C++ runtime.
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/out" alpine:3.22 sh -lc '
               set -eux
               apk add --no-cache libstdc++
-              cp -L /lib/ld-musl-aarch64.so.1 /out/libmusl-loader.so
               cp -L /usr/lib/libstdc++.so.6 /out/libstdcpp.so
               cp -L /usr/lib/libgcc_s.so.1 /out/libgcccompat.so
             '
-
           sudo chown -R "$(id -u):$(id -g)" app/src/main/jniLibs/arm64-v8a
 
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq patchelf
+          # Android APK native libraries need .so names; rewrite OpenCode SONAME dependencies.
           patchelf --replace-needed libstdc++.so.6 libstdcpp.so app/src/main/jniLibs/arm64-v8a/libopencode.so
           patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libopencode.so
           patchelf --replace-needed libgcc_s.so.1 libgcccompat.so app/src/main/jniLibs/arm64-v8a/libstdcpp.so
-          echo "OpenCode patched dependencies:"
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so
-          echo "libstdc++ patched dependencies:"
-          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libstdcpp.so
 
           chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
           file app/src/main/jniLibs/arm64-v8a/*.so
-          du -h app/src/main/jniLibs/arm64-v8a/*.so
 
-      - name: Verify embedded binaries are ARM64
+      - name: Verify ARM64 binaries and patch
         shell: bash
         run: |
           set -euxo pipefail
           for f in app/src/main/jniLibs/arm64-v8a/*.so; do
             readelf -h "$f" | grep -E 'Class:|Machine:|Type:'
           done
+          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libstdcpp.so
+          patchelf --print-needed app/src/main/jniLibs/arm64-v8a/libopencode.so | grep -Fx libgcccompat.so
 
-      - name: Strict smoke test all three CLIs under ARM64
+      - name: Strict runtime smoke test
         shell: bash
         run: |
           set -euxo pipefail
-          docker run --rm --platform linux/arm64             -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro"             alpine:3.22 sh -lc '
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/app/src/main/jniLibs/arm64-v8a:/ai:ro" \
+            alpine:3.22 sh -lc '
               set -eux
               /ai/libcodex.so --version
               /ai/libmusl-loader.so --library-path /ai /ai/libopencode.so --version
               /ai/libagy.so --version
+              /ai/libagy.so --help >/dev/null
             '
 
       - name: Set up Gradle 8.9
@@ -102,25 +119,25 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Build V3 APK
+      - name: Build V3.1 APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.0.0-AI.apk
-          sha256sum dist/KaiTerminal-v3.0.0-AI.apk
-          ls -lh dist/KaiTerminal-v3.0.0-AI.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/KaiTerminal-v3.1.0-AI.apk
+          sha256sum dist/KaiTerminal-v3.1.0-AI.apk
+          ls -lh dist/KaiTerminal-v3.1.0-AI.apk
 
-      - name: Verify APK signature package and bundled runtimes
+      - name: Verify final APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.0.0-AI.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.0.0-AI.apk | head -25
-          unzip -l dist/KaiTerminal-v3.0.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/KaiTerminal-v3.1.0-AI.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/KaiTerminal-v3.1.0-AI.apk | head -25
+          unzip -l dist/KaiTerminal-v3.1.0-AI.apk | grep -E 'lib/arm64-v8a/(libcodex|libopencode|libagy|libmusl-loader|libstdcpp|libgcccompat)'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KaiTerminal-v3.0.0-AI
-          path: dist/KaiTerminal-v3.0.0-AI.apk
+          name: KaiTerminal-v3.1.0-AI
+          path: dist/KaiTerminal-v3.1.0-AI.apk
           if-no-files-found: error
