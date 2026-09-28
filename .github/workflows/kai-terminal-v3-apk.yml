@@ -202,3 +202,16 @@ jobs:
           name: KaiTerminal-v3.2.0-AI
           path: dist/KaiTerminal-v3.2.0-AI.apk
           if-no-files-found: error
+
+      - name: Publish direct APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="kai-terminal-v3.2.0"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/KaiTerminal-v3.2.0-AI.apk --clobber
+          else
+            gh release create "$TAG"               dist/KaiTerminal-v3.2.0-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.2.0"               --notes "Android ARM64 build. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
+          fi
