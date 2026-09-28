@@ -13,7 +13,7 @@ def replace_once(path: Path, old: str, new: str) -> None:
     if new and new in text:
         return
     if old not in text:
-        raise SystemExit(f"Patch anchor not found in {path}: {old[:80]!r}")
+        raise SystemExit(f"Patch anchor not found in {path}: {old[:90]!r}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
@@ -38,20 +38,27 @@ def main() -> None:
 
     activity = repo / "app/src/main/java/com/termux/app/TermuxActivity.java"
     session_client = repo / "app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java"
-    layout = repo / "app/src/main/res/layout/activity_termux.xml"
     strings = repo / "app/src/main/res/values/strings.xml"
     manifest = repo / "app/src/main/AndroidManifest.xml"
 
-    replace_once(
-        strings,
-        '<!ENTITY TERMUX_APP_NAME "Termux">',
-        '<!ENTITY TERMUX_APP_NAME "Termux AI">',
-    )
+    replace_once(strings, '<!ENTITY TERMUX_APP_NAME "Termux">', '<!ENTITY TERMUX_APP_NAME "Termux AI">')
 
     replace_once(
         activity,
+        "import android.content.IntentFilter;\n",
+        "import android.content.IntentFilter;\nimport android.graphics.Color;\n",
+    )
+    replace_once(
+        activity,
+        "import android.widget.RelativeLayout;\n",
+        "import android.widget.RelativeLayout;\nimport android.widget.TextView;\n",
+    )
+    replace_once(
+        activity,
         "import com.termux.app.api.file.FileReceiverActivity;\n",
-        "import com.termux.app.api.file.FileReceiverActivity;\nimport com.termux.app.ai.AiCliManager;\n",
+        "import com.termux.app.api.file.FileReceiverActivity;\n"
+        "import com.termux.app.ai.AiCliManager;\n"
+        "import com.termux.app.ai.AiHomeActivity;\n",
     )
 
     replace_once(
@@ -64,8 +71,11 @@ def main() -> None:
 
     replace_once(
         activity,
-        "        setSettingsButtonView();\n\n        setNewSessionButtonView();",
-        "        setSettingsButtonView();\n\n        setAiHubButtonView();\n\n        setNewSessionButtonView();",
+        "        setToggleKeyboardView();\n\n        registerForContextMenu(mTerminalView);",
+        "        setToggleKeyboardView();\n\n"
+        "        setAiHubButtonView();\n"
+        "        setWorkspaceChrome();\n\n"
+        "        registerForContextMenu(mTerminalView);",
     )
 
     replace_once(
@@ -127,16 +137,69 @@ def main() -> None:
         "    private void setNewSessionButtonView() {",
         "    private void setAiHubButtonView() {\n"
         "        View aiHubButton = findViewById(R.id.ai_hub_button);\n"
-        "        aiHubButton.setOnClickListener(v -> {\n"
-        "            getDrawer().closeDrawers();\n"
-        "            AiCliManager.showHub(this);\n"
+        "        if (aiHubButton != null) {\n"
+        "            aiHubButton.setOnClickListener(v -> {\n"
+        "                getDrawer().closeDrawers();\n"
+        "                AiCliManager.showHub(this);\n"
+        "            });\n"
+        "        }\n"
+        "    }\n\n"
+        "    private void setWorkspaceChrome() {\n"
+        "        getWindow().setStatusBarColor(Color.rgb(13, 15, 18));\n"
+        "        getWindow().setNavigationBarColor(Color.rgb(13, 15, 18));\n\n"
+        "        View homeButton = findViewById(R.id.workspace_home_button);\n"
+        "        if (homeButton != null) homeButton.setOnClickListener(v -> {\n"
+        "            startActivity(new Intent(this, AiHomeActivity.class));\n"
+        "            finish();\n"
+        "        });\n\n"
+        "        View drawerButton = findViewById(R.id.session_drawer_button);\n"
+        "        if (drawerButton != null) drawerButton.setOnClickListener(v -> getDrawer().openDrawer(Gravity.LEFT));\n\n"
+        "        EditText commandInput = findViewById(R.id.command_input);\n"
+        "        View sendButton = findViewById(R.id.send_command_button);\n"
+        "        if (sendButton != null) sendButton.setOnClickListener(v -> sendComposerCommand());\n"
+        "        if (commandInput != null) commandInput.setOnEditorActionListener((v, actionId, event) -> {\n"
+        "            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {\n"
+        "                sendComposerCommand();\n"
+        "                return true;\n"
+        "            }\n"
+        "            return false;\n"
         "        });\n"
+        "        updateWorkspaceSessionTitle();\n"
+        "    }\n\n"
+        "    private void sendComposerCommand() {\n"
+        "        EditText input = findViewById(R.id.command_input);\n"
+        "        if (input == null || mTerminalView == null) return;\n"
+        "        String command = input.getText().toString();\n"
+        "        if (command.trim().isEmpty()) return;\n"
+        "        TerminalSession session = mTerminalView.getCurrentSession();\n"
+        "        if (session == null) return;\n"
+        "        session.write(command + \"\\r\");\n"
+        "        input.setText(\"\");\n"
+        "        mTerminalView.requestFocus();\n"
+        "    }\n\n"
+        "    public void updateWorkspaceSessionTitle() {\n"
+        "        TextView title = findViewById(R.id.workspace_session_title);\n"
+        "        if (title == null || mTerminalView == null) return;\n"
+        "        TerminalSession session = mTerminalView.getCurrentSession();\n"
+        "        String label = \"Terminal\";\n"
+        "        if (session != null && session.mSessionName != null && !session.mSessionName.trim().isEmpty()) {\n"
+        "            label = session.mSessionName;\n"
+        "        }\n"
+        "        title.setText(label);\n"
         "    }\n\n"
         "    public void launchCommandInNewSession(String command, String sessionName) {\n"
         "        if (mTermuxTerminalSessionActivityClient == null) return;\n"
         "        mTermuxTerminalSessionActivityClient.addNewSessionAndRun(command, sessionName);\n"
         "    }\n\n"
         "    private void setNewSessionButtonView() {",
+    )
+
+    replace_once(
+        session_client,
+        "        checkAndScrollToSession(session);\n        updateBackgroundColor();",
+        "        checkAndScrollToSession(session);\n"
+        "        updateBackgroundColor();\n"
+        "        mActivity.updateWorkspaceSessionTitle();",
     )
 
     replace_once(
@@ -149,34 +212,6 @@ def main() -> None:
         "        mActivity.getTerminalView().postDelayed(() -> session.write(command + \"\\r\"), 250);\n"
         "    }\n\n"
         "    public void setCurrentStoredSession() {",
-    )
-
-    replace_once(
-        layout,
-        "                    <ImageButton\n"
-        "                        android:id=\"@+id/settings_button\"\n"
-        "                        android:layout_width=\"40dp\"\n"
-        "                        android:layout_height=\"40dp\"\n"
-        "                        android:src=\"@drawable/ic_settings\"\n"
-        "                        android:background=\"@null\"\n"
-        "                        android:contentDescription=\"@string/action_open_settings\"\n"
-        "                        app:tint=\"?attr/termuxActivityDrawerImageTint\" />",
-        "                    <ImageButton\n"
-        "                        android:id=\"@+id/settings_button\"\n"
-        "                        android:layout_width=\"40dp\"\n"
-        "                        android:layout_height=\"40dp\"\n"
-        "                        android:src=\"@drawable/ic_settings\"\n"
-        "                        android:background=\"@null\"\n"
-        "                        android:contentDescription=\"@string/action_open_settings\"\n"
-        "                        app:tint=\"?attr/termuxActivityDrawerImageTint\" />\n\n"
-        "                    <com.google.android.material.button.MaterialButton\n"
-        "                        android:id=\"@+id/ai_hub_button\"\n"
-        "                        style=\"?android:attr/buttonBarButtonStyle\"\n"
-        "                        android:layout_width=\"0dp\"\n"
-        "                        android:layout_height=\"40dp\"\n"
-        "                        android:layout_weight=\"1\"\n"
-        "                        android:text=\"@string/action_ai_hub\"\n"
-        "                        android:textAllCaps=\"false\" />",
     )
 
     replace_once(
@@ -215,7 +250,7 @@ def main() -> None:
         "            <!-- Phone launcher moved to AiHomeActivity. -->\n",
     )
 
-    print("Termux AI Workspace v2 patch applied successfully.")
+    print("Termux AI Workspace v3 desktop-inspired patch applied successfully.")
     print("Base audited against upstream commit:", BASE_SHA)
     print("Next: ./gradlew assembleDebug")
 
