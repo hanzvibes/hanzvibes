@@ -303,7 +303,9 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
                 return;
             }
 
-            openSession(wrapper.getTerminalSession());
+            TerminalSession terminal = wrapper.getTerminalSession();
+            initializeHeadlessSession(terminal);
+            openSession(terminal);
             refreshSessions();
         });
     }
@@ -337,6 +339,7 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
             }
 
             TerminalSession terminal = wrapper.getTerminalSession();
+            initializeHeadlessSession(terminal);
             openSession(terminal);
             refreshSessions();
 
@@ -348,6 +351,20 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
         } catch (Exception e) {
             showToast("Could not prepare " + label + ".");
         }
+    }
+
+    private void initializeHeadlessSession(TerminalSession session) {
+        if (session == null || session.getEmulator() != null) return;
+
+        // TerminalSession only spawns its subprocess from updateSize().
+        // The stock Termux UI gets this from TerminalView. Our native app has no
+        // TerminalView, so initialize a headless PTY explicitly.
+        session.updateSize(
+            120, // columns
+            40,  // rows
+            8,   // cell width px, only used for PTY window metadata
+            16   // cell height px
+        );
     }
 
     private void openSession(TerminalSession session) {
@@ -428,9 +445,14 @@ public final class NativeAiActivity extends AppCompatActivity implements Service
                 : compactPath(cwd)
         );
 
-        workspaceState.setText(session.isRunning() ? "RUNNING" : "EXITED");
+        boolean started = session.getPid() > 0;
+        boolean running = started && session.isRunning();
+
+        workspaceState.setText(
+            !started ? "STARTING" : (running ? "RUNNING" : "EXITED")
+        );
         workspaceState.setTextColor(
-            session.isRunning()
+            running
                 ? Color.rgb(154, 255, 69)
                 : Color.rgb(155, 162, 172)
         );
