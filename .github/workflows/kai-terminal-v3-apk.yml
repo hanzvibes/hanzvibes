@@ -5,6 +5,10 @@ on:
     branches: ["build/kai-terminal-v3-2"]
   workflow_dispatch:
 
+concurrency:
+  group: kai-terminal-v3-2-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -212,9 +216,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          TAG="kai-terminal-v3.2.0"
+          TAG="kai-terminal-v3.2.1"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/KaiTerminal-v3.2.1-AI.apk --clobber
           else
-            gh release create "$TAG"               dist/KaiTerminal-v3.2.1-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.2.0"               --notes "Android ARM64 build. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
+            gh release create "$TAG"               dist/KaiTerminal-v3.2.1-AI.apk               --target "$GITHUB_SHA"               --title "Kai Terminal v3.2.1"               --notes "Android ARM64 build. Fixes Codex device-login spinner flooding so the login URL and one-time code stay visible. Bundled Codex CLI, OpenCode CLI, and Antigravity CLI. Passed packaged-APK smoke tests."
           fi
