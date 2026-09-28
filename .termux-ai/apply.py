@@ -58,7 +58,8 @@ def main() -> None:
         "import com.termux.app.api.file.FileReceiverActivity;\n",
         "import com.termux.app.api.file.FileReceiverActivity;\n"
         "import com.termux.app.ai.AiCliManager;\n"
-        "import com.termux.app.ai.AiHomeActivity;\n",
+        "import com.termux.app.ai.AiHomeActivity;\n"
+        "import com.termux.app.ai.AiWorkspaceBranding;\n",
     )
 
     replace_once(
@@ -100,6 +101,7 @@ def main() -> None:
     replace_once(
         activity,
         "        final Intent intent = getIntent();\n        setIntent(null);\n",
+        "        AiWorkspaceBranding.applyMotdIfDefault();\n"
         "        final Intent intent = getIntent();\n"
         "        setIntent(null);\n"
         "        final String aiCommand = intent == null ? null : intent.getStringExtra(EXTRA_AI_COMMAND);\n"
