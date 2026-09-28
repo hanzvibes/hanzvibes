@@ -86,6 +86,15 @@ public final class AiTerminalViewport {
         webView.addJavascriptInterface(new Bridge(), "TermuxNative");
         webView.setWebViewClient(new LocalContentWebViewClient(assetLoader));
         webView.loadUrl(APP_ASSET_URL);
+
+        webView.postDelayed(() -> {
+            TerminalSession session = activity.getCurrentSession();
+            if (!pageReady && isAgentSession(session) && !rawTerminalOverride) {
+                showRendererError(
+                    "AI interface did not start. You can retry the app or open the raw terminal."
+                );
+            }
+        }, 8000);
     }
 
     public void destroy() {
