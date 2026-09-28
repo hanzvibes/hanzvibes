@@ -115,6 +115,7 @@ def main() -> None:
         "                            launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);\n"
         "                        }\n"
         "                        mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);",
+        "                        AiWorkspaceBranding.applyMotdIfDefault();\n"
         "                        if (aiCommand != null) {\n"
         "                            mTermuxTerminalSessionActivityClient.addNewSessionAndRun(aiCommand, aiSessionName);\n"
         "                        } else {\n"
