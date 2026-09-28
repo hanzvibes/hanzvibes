@@ -178,7 +178,7 @@ def main() -> None:
         '    }\n\n'
     )
     service_text = service.read_text(encoding="utf-8")
-    if "setNativeTerminalSessionClient" not in service_text:
+    if "public synchronized void setNativeTerminalSessionClient" not in service_text:
         if insert_anchor not in service_text:
             raise SystemExit("Native service method insertion anchor not found")
         service.write_text(
