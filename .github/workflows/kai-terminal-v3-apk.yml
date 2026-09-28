@@ -101,6 +101,17 @@ jobs:
               cp -L /lib/aarch64-linux-gnu/libpthread.so.0 /out/libagypthread.so
               cp -L /lib/aarch64-linux-gnu/libdl.so.2 /out/libagydl.so
               cp -L /lib/aarch64-linux-gnu/librt.so.1 /out/libagyrt.so
+              cp -L /lib/aarch64-linux-gnu/libresolv.so.2 /out/libagyresolv.so
+              if [ -f /lib/aarch64-linux-gnu/libnss_dns.so.2 ]; then
+                cp -L /lib/aarch64-linux-gnu/libnss_dns.so.2 /out/libagynssdns.so
+              else
+                cp -L /usr/lib/aarch64-linux-gnu/libnss_dns.so.2 /out/libagynssdns.so
+              fi
+              if [ -f /lib/aarch64-linux-gnu/libnss_files.so.2 ]; then
+                cp -L /lib/aarch64-linux-gnu/libnss_files.so.2 /out/libagynssfiles.so
+              else
+                cp -L /usr/lib/aarch64-linux-gnu/libnss_files.so.2 /out/libagynssfiles.so
+              fi
               cp -L /lib/aarch64-linux-gnu/libgcc_s.so.1 /out/libagygcc.so
               cp -L /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /out/libagystdcpp.so
             '
@@ -144,6 +155,9 @@ jobs:
               ln -s /ai/libagypthread.so /tmp/agy-runtime/libpthread.so.0
               ln -s /ai/libagydl.so /tmp/agy-runtime/libdl.so.2
               ln -s /ai/libagyrt.so /tmp/agy-runtime/librt.so.1
+              ln -s /ai/libagyresolv.so /tmp/agy-runtime/libresolv.so.2
+              ln -s /ai/libagynssdns.so /tmp/agy-runtime/libnss_dns.so.2
+              ln -s /ai/libagynssfiles.so /tmp/agy-runtime/libnss_files.so.2
               ln -s /ai/libagygcc.so /tmp/agy-runtime/libgcc_s.so.1
               ln -s /ai/libagystdcpp.so /tmp/agy-runtime/libstdc++.so.6
 
