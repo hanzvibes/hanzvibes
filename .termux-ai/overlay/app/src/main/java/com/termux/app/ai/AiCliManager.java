@@ -33,6 +33,7 @@ public final class AiCliManager {
             "Antigravity CLI",
             "Claude Code",
             "Gemini CLI",
+            "Grok Build",
             activity.getString(R.string.action_ai_update_all)
         };
 
@@ -61,6 +62,10 @@ public final class AiCliManager {
                     case 4:
                         action = "gemini";
                         sessionName = "Gemini";
+                        break;
+                    case 5:
+                        action = "grok";
+                        sessionName = "Grok";
                         break;
                     default:
                         action = "update-all";
