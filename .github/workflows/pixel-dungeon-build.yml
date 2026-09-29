@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -87,8 +87,8 @@ jobs:
                   applicationId 'com.watabou.pixeldungeon.modern'
                   minSdk 26
                   targetSdk 36
-                  versionCode 200001
-                  versionName '2.0.0-modern-baseline'
+                  versionCode 200100
+                  versionName '2.0.0-modern-preview'
               }
 
               compileOptions {
@@ -110,7 +110,7 @@ jobs:
               <uses-feature android:glEsVersion="0x00020000" android:required="true" />
               <application
                   android:allowBackup="true"
-                  android:hardwareAccelerated="true"
+                  android:hardwareAccelerated="true"\n                  android:enableOnBackInvokedCallback="true"
                   android:icon="@drawable/ic_launcher"
                   android:label="@string/app_name"
                   android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
@@ -127,48 +127,13 @@ jobs:
           </manifest>
           EOF
 
-      - name: Patch legacy Java compatibility
+      - name: Apply Android + mobile UX modernization
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-
-          root = Path(os.environ["RUNNER_TEMP"]) / "pd" / "modern" / "app" / "src" / "main" / "java"
-
-          for path in root.rglob("*.java"):
-              text = path.read_text(encoding="utf-8")
-              updated = (text
-                  .replace("FloatMath.cos(", "(float)Math.cos(")
-                  .replace("FloatMath.sin(", "(float)Math.sin(")
-                  .replace("FloatMath.sqrt(", "(float)Math.sqrt("))
-              if updated != text:
-                  path.write_text(updated, encoding="utf-8")
-
-          replacements = {
-              "com/watabou/pixeldungeon/items/Heap.java": [
-                  ("(Collection<? extends Item>) bundle.getCollection( ITEMS )",
-                   "(Collection) bundle.getCollection( ITEMS )")
-              ],
-              "com/watabou/pixeldungeon/actors/mobs/Mimic.java": [
-                  ("(Collection<? extends Item>) bundle.getCollection( ITEMS )",
-                   "(Collection) bundle.getCollection( ITEMS )")
-              ],
-              "com/watabou/pixeldungeon/levels/RegularLevel.java": [
-                  ("(Collection<? extends Room>) bundle.getCollection( \"rooms\" )",
-                   "(Collection) bundle.getCollection( \"rooms\" )")
-              ],
-          }
-
-          for rel, reps in replacements.items():
-              path = root / rel
-              text = path.read_text(encoding="utf-8")
-              for old, new in reps:
-                  if old not in text:
-                      raise SystemExit(f"Patch anchor missing: {rel}: {old}")
-                  text = text.replace(old, new, 1)
-              path.write_text(text, encoding="utf-8")
-          PY
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/pd/modern/app/src/main/java/com/watabou/pixeldungeon/io"
+          cp "$GITHUB_WORKSPACE/pixel-dungeon-ci/SaveFiles.java" "$RUNNER_TEMP/pd/modern/app/src/main/java/com/watabou/pixeldungeon/io/SaveFiles.java"
+          python3 "$GITHUB_WORKSPACE/pixel-dungeon-ci/modernize_sources.py" "$RUNNER_TEMP/pd/modern"
 
       - name: Build APK
         working-directory: ${{ runner.temp }}/pd/modern
@@ -182,9 +147,54 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -30
           sha256sum "$APK"
 
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Smoke test launch on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euxo pipefail
+            APK="$RUNNER_TEMP/pd/modern/app/build/outputs/apk/debug/app-debug.apk"
+            PACKAGE="com.watabou.pixeldungeon.modern"
+            adb install -r "$APK"
+            adb logcat -c
+            COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "$PACKAGE" | tail -1 | tr -d '\r')"
+            test -n "$COMPONENT"
+            adb shell am start -W -n "$COMPONENT"
+            sleep 6
+            PID="$(adb shell pidof "$PACKAGE" | tr -d '\r')"
+            test -n "$PID"
+            adb exec-out screencap -p > "$RUNNER_TEMP/pixel-dungeon-title.png"
+            adb logcat -d > "$RUNNER_TEMP/pixel-dungeon-logcat.txt"
+            if grep -q "FATAL EXCEPTION" "$RUNNER_TEMP/pixel-dungeon-logcat.txt"; then
+              grep -A80 -B10 "FATAL EXCEPTION" "$RUNNER_TEMP/pixel-dungeon-logcat.txt"
+              exit 1
+            fi
+
+      - name: Package modernized source snapshot
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/pd"
+          zip -qr pixel-dungeon-modern-source.zip modern
+
       - name: Upload playable APK
         uses: actions/upload-artifact@v4
         with:
-          name: pixel-dungeon-modern-baseline-apk
-          path: ${{ runner.temp }}/pd/modern/app/build/outputs/apk/debug/app-debug.apk
+          name: pixel-dungeon-modern-playable
+          path: |
+            ${{ runner.temp }}/pd/modern/app/build/outputs/apk/debug/app-debug.apk
+            ${{ runner.temp }}/pixel-dungeon-title.png
+            ${{ runner.temp }}/pixel-dungeon-logcat.txt
+            ${{ runner.temp }}/pd/pixel-dungeon-modern-source.zip
           if-no-files-found: error
