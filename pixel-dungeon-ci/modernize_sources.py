@@ -267,9 +267,14 @@ def patch_settings():
         "\t\tbtnSound.checked( PixelDungeon.soundFx() );\n\t\tadd( btnSound );",
         "\t\tbtnSound.checked( PixelDungeon.soundFx() );\n\t\tadd( btnSound );\n\n\t\tCheckBox btnHaptics = new CheckBox( TXT_HAPTICS ) {\n\t\t\t@Override\n\t\t\tprotected void onClick() {\n\t\t\t\tsuper.onClick();\n\t\t\t\tPixelDungeon.vibration( checked() );\n\t\t\t\tif (checked()) Game.vibrate( 30 );\n\t\t\t}\n\t\t};\n\t\tbtnHaptics.setRect( 0, btnSound.bottom() + GAP, WIDTH, BTN_HEIGHT );\n\t\tbtnHaptics.checked( PixelDungeon.vibration() );\n\t\tadd( btnHaptics );\n\n\t\tCheckBox btnReducedMotion = new CheckBox( TXT_REDUCED_MOTION ) {\n\t\t\t@Override\n\t\t\tprotected void onClick() {\n\t\t\t\tsuper.onClick();\n\t\t\t\tPixelDungeon.reducedMotion( checked() );\n\t\t\t}\n\t\t};\n\t\tbtnReducedMotion.setRect( 0, btnHaptics.bottom() + GAP, WIDTH, BTN_HEIGHT );\n\t\tbtnReducedMotion.checked( PixelDungeon.reducedMotion() );\n\t\tadd( btnReducedMotion );",
         "settings accessibility controls")
-    if s.count("btnSound.bottom() + GAP") != 2:
-        raise SystemExit("Expected two downstream settings anchors")
-    s = s.replace("btnSound.bottom() + GAP", "btnReducedMotion.bottom() + GAP")
+    s = replace_once(s,
+        "btnBrightness.setRect( 0, btnSound.bottom() + GAP, WIDTH, BTN_HEIGHT );",
+        "btnBrightness.setRect( 0, btnReducedMotion.bottom() + GAP, WIDTH, BTN_HEIGHT );",
+        "settings brightness position")
+    s = replace_once(s,
+        "btnOrientation.setRect( 0, btnSound.bottom() + GAP, WIDTH, BTN_HEIGHT );",
+        "btnOrientation.setRect( 0, btnReducedMotion.bottom() + GAP, WIDTH, BTN_HEIGHT );",
+        "settings orientation position")
     write(p, s)
 
 def patch_ui_polish():
