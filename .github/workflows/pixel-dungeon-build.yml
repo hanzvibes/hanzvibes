@@ -1,0 +1,141 @@
+name: Pixel Dungeon Android Build
+
+on:
+  push:
+    branches: [ pixel-dungeon-modernization ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: yes | sdkmanager --licenses >/dev/null || true; sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Assemble source tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/pd"
+          cd "$RUNNER_TEMP/pd"
+          git clone https://github.com/watabou/pixel-dungeon.git game
+          git -C game checkout ca458a28f053612973d5d6059dae5f6f2ca4fcb7
+          git clone https://github.com/watabou/PD-classes.git engine
+          git -C engine checkout c0b690a4163020963e70a58a7d4f27965dc8f134
+
+          mkdir -p modern/app/src/main/java/com/watabou modern/app/src/main/assets modern/app/src/main/res
+          cp -R game/src/com/watabou/pixeldungeon modern/app/src/main/java/com/watabou/
+          cp -R engine/com/watabou/* modern/app/src/main/java/com/watabou/
+          cp -R game/assets/. modern/app/src/main/assets/
+          cp -R game/res/. modern/app/src/main/res/
+
+          cat > modern/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'PixelDungeonModern'
+          include ':app'
+          EOF
+
+          cat > modern/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '9.4.1' apply false
+          }
+          EOF
+
+          cat > modern/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          org.gradle.caching=true
+          android.useAndroidX=false
+          EOF
+
+          cat > modern/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.watabou.pixeldungeon'
+              compileSdk 36
+
+              defaultConfig {
+                  applicationId 'com.watabou.pixeldungeon.modern'
+                  minSdk 26
+                  targetSdk 36
+                  versionCode 200001
+                  versionName '2.0.0-modern-baseline'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+
+              buildTypes {
+                  debug { debuggable true }
+                  release { minifyEnabled false }
+              }
+          }
+          EOF
+
+          cat > modern/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+              <application
+                  android:allowBackup="true"
+                  android:hardwareAccelerated="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+                  <activity
+                      android:name=".PixelDungeon"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      - name: Build APK
+        working-directory: ${{ runner.temp }}/pd/modern
+        run: gradle :app:assembleDebug --stacktrace --warning-mode all
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK="$RUNNER_TEMP/pd/modern/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -30
+          sha256sum "$APK"
+
+      - name: Upload playable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-dungeon-modern-baseline-apk
+          path: ${{ runner.temp }}/pd/modern/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
