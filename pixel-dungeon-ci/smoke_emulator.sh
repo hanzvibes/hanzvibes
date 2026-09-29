@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 APK="$RUNNER_TEMP/pd/modern/app/build/outputs/apk/debug/app-debug.apk"
-PACKAGE="com.watabou.pixeldungeon.modern"
+PACKAGE="com.watabou.pixeldungeon.premium"
 
 test -s "$APK"
 adb install -r "$APK"

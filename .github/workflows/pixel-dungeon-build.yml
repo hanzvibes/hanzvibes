@@ -31,6 +31,9 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
+      - name: Install image verification dependency
+        run: python3 -m pip install --quiet pillow
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
@@ -84,11 +87,11 @@ jobs:
               compileSdk 36
 
               defaultConfig {
-                  applicationId 'com.watabou.pixeldungeon.modern'
+                  applicationId 'com.watabou.pixeldungeon.premium'
                   minSdk 26
                   targetSdk 36
-                  versionCode 200100
-                  versionName '2.0.0-modern-preview'
+                  versionCode 200200
+                  versionName '2.0.0-premium-preview'
               }
 
               compileOptions {
@@ -136,6 +139,31 @@ jobs:
           cp "$GITHUB_WORKSPACE/pixel-dungeon-ci/SaveFiles.java" "$RUNNER_TEMP/pd/modern/app/src/main/java/com/watabou/pixeldungeon/io/SaveFiles.java"
           python3 "$GITHUB_WORKSPACE/pixel-dungeon-ci/modernize_sources.py" "$RUNNER_TEMP/pd/modern"
 
+      - name: Apply premium graphics atlas
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PREMIUM="$GITHUB_WORKSPACE/pixel-dungeon-ci/premium-assets"
+          TARGET="$RUNNER_TEMP/pd/modern/app/src/main/assets"
+          test -d "$PREMIUM"
+          for asset in "$PREMIUM"/*.png; do
+            name="$(basename "$asset")"
+            test -f "$TARGET/$name"
+            cp -v "$asset" "$TARGET/$name"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          import os
+          premium = Path(os.environ["GITHUB_WORKSPACE"]) / "pixel-dungeon-ci" / "premium-assets"
+          target = Path(os.environ["RUNNER_TEMP"]) / "pd" / "modern" / "app" / "src" / "main" / "assets"
+          for src in sorted(premium.glob("*.png")):
+              with Image.open(src) as a, Image.open(target / src.name) as b:
+                  if a.size != b.size:
+                      raise SystemExit(f"Atlas dimension mismatch: {src.name}: {a.size} != {b.size}")
+          print("Premium atlas dimensions verified.")
+          PY
+
       - name: Build APK
         working-directory: ${{ runner.temp }}/pd/modern
         run: gradle :app:assembleDebug --stacktrace --warning-mode all
@@ -175,7 +203,7 @@ jobs:
       - name: Upload playable APK
         uses: actions/upload-artifact@v4
         with:
-          name: pixel-dungeon-modern-playable
+          name: pixel-dungeon-modern-premium-playable
           path: |
             ${{ runner.temp }}/pd/modern/app/build/outputs/apk/debug/app-debug.apk
             ${{ runner.temp }}/pixel-dungeon-title.png
