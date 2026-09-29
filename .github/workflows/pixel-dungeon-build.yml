@@ -165,7 +165,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -euxo pipefail
+            set -eu
             APK="$RUNNER_TEMP/pd/modern/app/build/outputs/apk/debug/app-debug.apk"
             PACKAGE="com.watabou.pixeldungeon.modern"
             adb install -r "$APK"
