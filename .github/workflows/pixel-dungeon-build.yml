@@ -87,11 +87,11 @@ jobs:
               compileSdk 36
 
               defaultConfig {
-                  applicationId 'com.watabou.pixeldungeon.premium'
+                  applicationId 'com.watabou.pixeldungeon.hdremaster'
                   minSdk 26
                   targetSdk 36
-                  versionCode 200200
-                  versionName '2.0.0-premium-preview'
+                  versionCode 200300
+                  versionName '2.1.0-hd-remaster-preview'
               }
 
               compileOptions {
@@ -164,6 +164,20 @@ jobs:
           print("Premium atlas dimensions verified.")
           PY
 
+      - name: Apply true HD2x graphics
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 "$GITHUB_WORKSPACE/pixel-dungeon-ci/apply_hd2x_graphics.py" \
+            "$RUNNER_TEMP/pd/modern" \
+            "$GITHUB_WORKSPACE/pixel-dungeon-ci/hd2x-selected-atlases.zip"
+
+      - name: Enable HD2x logical renderer mapping
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 "$GITHUB_WORKSPACE/pixel-dungeon-ci/enable_hd2x_renderer.py" "$RUNNER_TEMP/pd/modern"
+
       - name: Build APK
         working-directory: ${{ runner.temp }}/pd/modern
         run: gradle :app:assembleDebug --stacktrace --warning-mode all
@@ -203,10 +217,13 @@ jobs:
       - name: Upload playable APK
         uses: actions/upload-artifact@v4
         with:
-          name: pixel-dungeon-modern-premium-playable
+          name: pixel-dungeon-hd-remaster-playable
           path: |
             ${{ runner.temp }}/pd/modern/app/build/outputs/apk/debug/app-debug.apk
             ${{ runner.temp }}/pixel-dungeon-title.png
+            ${{ runner.temp }}/pixel-dungeon-start.png
+            ${{ runner.temp }}/pixel-dungeon-intro.png
+            ${{ runner.temp }}/pixel-dungeon-gameplay.png
             ${{ runner.temp }}/pixel-dungeon-logcat.txt
             ${{ runner.temp }}/pd/pixel-dungeon-modern-source.zip
           if-no-files-found: error
