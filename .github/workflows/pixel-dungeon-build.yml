@@ -127,6 +127,49 @@ jobs:
           </manifest>
           EOF
 
+      - name: Patch legacy Java compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "pd" / "modern" / "app" / "src" / "main" / "java"
+
+          for path in root.rglob("*.java"):
+              text = path.read_text(encoding="utf-8")
+              updated = (text
+                  .replace("FloatMath.cos(", "(float)Math.cos(")
+                  .replace("FloatMath.sin(", "(float)Math.sin(")
+                  .replace("FloatMath.sqrt(", "(float)Math.sqrt("))
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+
+          replacements = {
+              "com/watabou/pixeldungeon/items/Heap.java": [
+                  ("(Collection<? extends Item>) bundle.getCollection( ITEMS )",
+                   "(Collection) bundle.getCollection( ITEMS )")
+              ],
+              "com/watabou/pixeldungeon/actors/mobs/Mimic.java": [
+                  ("(Collection<? extends Item>) bundle.getCollection( ITEMS )",
+                   "(Collection) bundle.getCollection( ITEMS )")
+              ],
+              "com/watabou/pixeldungeon/levels/RegularLevel.java": [
+                  ("(Collection<? extends Room>) bundle.getCollection( \"rooms\" )",
+                   "(Collection) bundle.getCollection( \"rooms\" )")
+              ],
+          }
+
+          for rel, reps in replacements.items():
+              path = root / rel
+              text = path.read_text(encoding="utf-8")
+              for old, new in reps:
+                  if old not in text:
+                      raise SystemExit(f"Patch anchor missing: {rel}: {old}")
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Build APK
         working-directory: ${{ runner.temp }}/pd/modern
         run: gradle :app:assembleDebug --stacktrace --warning-mode all
