@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFile
 import sys, zipfile
 
 if len(sys.argv) != 3:
@@ -9,6 +9,11 @@ if len(sys.argv) != 3:
 root = Path(sys.argv[1]).resolve()
 overlay_zip = Path(sys.argv[2]).resolve()
 assets = root / "app" / "src" / "main" / "assets"
+
+# Some legacy/generated PNG streams are accepted by Android but are slightly
+# truncated according to Pillow's strict decoder. Decode tolerantly once and
+# re-encode every HD atlas as a clean PNG below.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 if not assets.is_dir():
     raise SystemExit(f"assets directory missing: {assets}")
@@ -28,6 +33,7 @@ for path in pngs:
 for path in pngs:
     if path.name in font_names:
         continue
+    print("Sanitize + upscale:", path.name)
     with Image.open(path) as im:
         out = im.convert("RGBA").resize((im.width * 2, im.height * 2), Image.Resampling.NEAREST)
         out.save(path, format="PNG", optimize=True)
