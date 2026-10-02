@@ -29,6 +29,11 @@ sealed interface AgentEvent {
         val message: String,
         override val timestamp: Long = System.currentTimeMillis(),
     ) : AgentEvent
+
+    data class Conversation(
+        val id: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+    ) : AgentEvent
 }
 
 enum class ToolState { RUNNING, SUCCESS, FAILED }

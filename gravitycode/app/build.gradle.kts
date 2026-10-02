@@ -24,17 +24,13 @@ android {
         applicationId = "dev.gravitycode.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
+        versionCode = 11
+        versionName = "1.0.0"
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("gravityDebug")
-        }
+        debug { signingConfig = signingConfigs.getByName("gravityDebug") }
     }
 
     buildFeatures {
@@ -54,9 +50,7 @@ android {
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
 dependencies {

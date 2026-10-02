@@ -6,6 +6,7 @@ import java.io.File
 
 class WorkspaceRepository(context: Context) {
     private val root = File(context.filesDir, "workspaces").apply { mkdirs() }
+    private val prefs = context.getSharedPreferences("gravitycode-workspace", Context.MODE_PRIVATE)
 
     val activeWorkspace: File
         get() = File(root, "default").apply {
@@ -16,12 +17,58 @@ class WorkspaceRepository(context: Context) {
     val activeProjectRoot: File
         get() {
             val workspace = activeWorkspace
-            return workspace.listFiles()
+            val selected = prefs.getString(KEY_ACTIVE_PROJECT, null)
+            if (!selected.isNullOrBlank()) {
+                val target = File(workspace, selected)
+                if (target.isDirectory) return target
+            }
+            val fallback = workspace.listFiles()
                 ?.asSequence()
                 ?.filter { it.isDirectory && File(it, ".git").exists() }
                 ?.maxByOrNull { it.lastModified() }
-                ?: workspace
+            if (fallback != null) prefs.edit().putString(KEY_ACTIVE_PROJECT, fallback.name).apply()
+            return fallback ?: workspace
         }
+
+    fun projects(): List<ProjectSummary> {
+        val active = activeProjectRoot
+        return activeWorkspace.listFiles()
+            ?.asSequence()
+            ?.filter { it.isDirectory && File(it, ".git").exists() }
+            ?.map { dir ->
+                val head = File(dir, ".git/HEAD").readTextOrNull()?.trim().orEmpty()
+                ProjectSummary(
+                    name = dir.name,
+                    branch = if (head.startsWith("ref:")) head.substringAfterLast('/') else if (head.isNotBlank()) "detached" else null,
+                    lastModified = dir.lastModified(),
+                    active = dir.canonicalPath == active.canonicalPath,
+                )
+            }
+            ?.sortedWith(compareByDescending<ProjectSummary> { it.active }.thenByDescending { it.lastModified })
+            ?.toList()
+            .orEmpty()
+    }
+
+    fun switchProject(name: String): Result<Unit> = runCatching {
+        val clean = requireProjectName(name)
+        val target = File(activeWorkspace, clean).canonicalFile
+        require(target.isDirectory) { "Project tidak ditemukan" }
+        require(File(target, ".git").exists()) { "Folder bukan Git repository" }
+        prefs.edit().putString(KEY_ACTIVE_PROJECT, clean).apply()
+    }
+
+    fun markActiveProject(name: String) {
+        runCatching { requireProjectName(name) }.onSuccess { prefs.edit().putString(KEY_ACTIVE_PROJECT, it).apply() }
+    }
+
+    fun deleteProject(name: String): Result<Unit> = runCatching {
+        val clean = requireProjectName(name)
+        val target = File(activeWorkspace, clean).canonicalFile
+        require(target.parentFile?.canonicalPath == activeWorkspace.canonicalPath) { "Project invalid" }
+        require(target.isDirectory) { "Project tidak ditemukan" }
+        require(target.deleteRecursively()) { "Gagal menghapus project" }
+        if (prefs.getString(KEY_ACTIVE_PROJECT, null) == clean) prefs.edit().remove(KEY_ACTIVE_PROJECT).apply()
+    }
 
     fun localStatus(): ProjectStatus {
         val project = activeProjectRoot
@@ -58,6 +105,38 @@ class WorkspaceRepository(context: Context) {
             }
             .sortedBy { it.relativePath.lowercase() }
             .toList()
+    }
+
+    fun search(query: String): List<SearchHit> {
+        val needle = query.trim()
+        if (needle.length < 2) return emptyList()
+        val project = activeProjectRoot
+        val hits = mutableListOf<SearchHit>()
+        project.walkTopDown()
+            .onEnter { directory -> directory == project || directory.name !in IGNORED_DIRECTORIES }
+            .maxDepth(MAX_DEPTH)
+            .filter { it.isFile && it.length() <= SEARCH_FILE_LIMIT_BYTES }
+            .filterNot { it.path.contains("${File.separator}.git${File.separator}") }
+            .take(MAX_SEARCH_FILES)
+            .forEach { file ->
+                if (hits.size >= MAX_SEARCH_RESULTS) return@forEach
+                val relative = file.relativeTo(project).path.replace(File.separatorChar, '/')
+                if (relative.contains(needle, ignoreCase = true)) {
+                    hits += SearchHit(relative, 0, "File name match")
+                    if (hits.size >= MAX_SEARCH_RESULTS) return@forEach
+                }
+                if (!isLikelyText(file)) return@forEach
+                runCatching {
+                    file.bufferedReader().useLines { lines ->
+                        lines.take(MAX_SEARCH_LINES_PER_FILE).forEachIndexed { index, line ->
+                            if (hits.size < MAX_SEARCH_RESULTS && line.contains(needle, ignoreCase = true)) {
+                                hits += SearchHit(relative, index + 1, line.trim().take(220))
+                            }
+                        }
+                    }
+                }
+            }
+        return hits.distinctBy { Triple(it.path, it.line, it.snippet) }.take(MAX_SEARCH_RESULTS)
     }
 
     fun preview(relativePath: String): Result<FilePreview> = runCatching {
@@ -106,7 +185,12 @@ class WorkspaceRepository(context: Context) {
         require(target.isFile) { "File tidak ditemukan" }
         require(target.extension.lowercase() !in IMAGE_EXTENSIONS) { "Image tidak dapat disimpan sebagai text" }
         require(target.length() <= PREVIEW_LIMIT_BYTES) { "File terlalu besar untuk diedit dengan aman. Gunakan terminal atau agent." }
-        target.writeText(content, Charsets.UTF_8)
+        val temp = File(target.parentFile, ".${target.name}.gravity-tmp")
+        temp.writeText(content, Charsets.UTF_8)
+        if (!temp.renameTo(target)) {
+            target.writeText(content, Charsets.UTF_8)
+            temp.delete()
+        }
         FilePreview(
             path = relativePath,
             content = content,
@@ -115,6 +199,32 @@ class WorkspaceRepository(context: Context) {
             binary = false,
             kind = PreviewKind.TEXT,
         )
+    }
+
+    fun createPath(relativePath: String, directory: Boolean): Result<Unit> = runCatching {
+        val target = resolveNewProjectFile(relativePath)
+        require(!target.exists()) { "Path sudah ada" }
+        require(!relativePath.split('/').contains(".git")) { "Tidak boleh membuat path di .git" }
+        if (directory) require(target.mkdirs()) { "Gagal membuat folder" }
+        else {
+            target.parentFile?.mkdirs()
+            require(target.createNewFile()) { "Gagal membuat file" }
+        }
+    }
+
+    fun renamePath(oldPath: String, newPath: String): Result<Unit> = runCatching {
+        val old = resolveProjectFile(oldPath)
+        val target = resolveNewProjectFile(newPath)
+        require(!oldPath.split('/').contains(".git") && !newPath.split('/').contains(".git")) { "Path .git dilindungi" }
+        require(!target.exists()) { "Tujuan sudah ada" }
+        target.parentFile?.mkdirs()
+        require(old.renameTo(target)) { "Gagal rename path" }
+    }
+
+    fun deletePath(relativePath: String): Result<Unit> = runCatching {
+        require(!relativePath.split('/').contains(".git")) { "Path .git dilindungi" }
+        val target = resolveProjectFile(relativePath)
+        require(target.deleteRecursively()) { "Gagal menghapus path" }
     }
 
     fun safeProjectFile(relativePath: String): Result<File> = runCatching { resolveProjectFile(relativePath) }
@@ -126,37 +236,54 @@ class WorkspaceRepository(context: Context) {
         return target
     }
 
+    private fun resolveNewProjectFile(relativePath: String): File {
+        val clean = relativePath.trim().trimStart('/').replace('\\', '/')
+        require(clean.isNotBlank()) { "Path kosong" }
+        require(!clean.split('/').any { it == ".." || it.isBlank() }) { "Path invalid" }
+        val project = activeProjectRoot.canonicalFile
+        val target = File(project, clean).canonicalFile
+        require(target.path.startsWith(project.path + File.separator)) { "Path berada di luar workspace" }
+        return target
+    }
+
+    private fun isLikelyText(file: File): Boolean {
+        if (file.extension.lowercase() in TEXT_EXTENSIONS) return true
+        return runCatching {
+            file.inputStream().use { input ->
+                val buffer = ByteArray(2048)
+                val count = input.read(buffer)
+                count <= 0 || buffer.take(count).none { it == 0.toByte() }
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun requireProjectName(name: String): String {
+        val clean = name.trim()
+        require(clean.matches(Regex("[A-Za-z0-9._-]+"))) { "Nama project invalid" }
+        return clean
+    }
+
     private fun File.ensureStarterFiles() {
         val readme = File(this, "README.md")
-        if (!readme.exists()) {
-            readme.writeText("# GravityCode workspace\n\nWorkspace lokal untuk sesi Antigravity CLI.\n")
-        }
+        if (!readme.exists()) readme.writeText("# GravityCode workspace\n\nWorkspace lokal untuk sesi Antigravity CLI.\n")
     }
 
     private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
 
     companion object {
-        private const val MAX_DEPTH = 10
-        private const val MAX_ENTRIES = 600
+        private const val KEY_ACTIVE_PROJECT = "active_project"
+        private const val MAX_DEPTH = 12
+        private const val MAX_ENTRIES = 1200
         private const val PREVIEW_LIMIT_BYTES = 512 * 1024
         private const val EDIT_LIMIT_BYTES = 2 * 1024 * 1024
         private const val IMAGE_PREVIEW_LIMIT_BYTES = 12L * 1024L * 1024L
+        private const val SEARCH_FILE_LIMIT_BYTES = 1024L * 1024L
+        private const val MAX_SEARCH_FILES = 500
+        private const val MAX_SEARCH_RESULTS = 120
+        private const val MAX_SEARCH_LINES_PER_FILE = 20_000
         private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
-        private val IGNORED_DIRECTORIES = setOf(
-            ".git",
-            ".gradle",
-            ".idea",
-            ".next",
-            ".cache",
-            ".turbo",
-            ".parcel-cache",
-            "node_modules",
-            "build",
-            "dist",
-            "coverage",
-            "out",
-            "target",
-        )
+        private val TEXT_EXTENSIONS = setOf("kt", "kts", "java", "js", "jsx", "ts", "tsx", "json", "yaml", "yml", "toml", "md", "txt", "py", "c", "h", "cpp", "cc", "html", "css", "scss", "xml", "gradle", "properties", "sh", "go", "rs", "sql")
+        private val IGNORED_DIRECTORIES = setOf(".git", ".gradle", ".idea", ".next", ".cache", ".turbo", ".parcel-cache", "node_modules", "build", "dist", "coverage", "out", "target")
     }
 }
 
@@ -167,6 +294,19 @@ data class WorkspaceEntry(
     val depth: Int,
     val sizeBytes: Long,
     val extension: String?,
+)
+
+data class ProjectSummary(
+    val name: String,
+    val branch: String?,
+    val lastModified: Long,
+    val active: Boolean,
+)
+
+data class SearchHit(
+    val path: String,
+    val line: Int,
+    val snippet: String,
 )
 
 enum class PreviewKind { TEXT, IMAGE, BINARY }
@@ -184,6 +324,8 @@ data class FilePreview(
 data class GitChange(
     val status: String,
     val path: String,
+    val staged: Boolean = false,
+    val working: Boolean = true,
 )
 
 data class GitDiff(
@@ -193,6 +335,12 @@ data class GitDiff(
     val additions: Int,
     val deletions: Int,
     val binary: Boolean = false,
+)
+
+data class GitCommit(
+    val hash: String,
+    val date: String,
+    val subject: String,
 )
 
 data class ProjectStatus(
