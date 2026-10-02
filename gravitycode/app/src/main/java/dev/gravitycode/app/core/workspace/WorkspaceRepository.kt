@@ -31,6 +31,7 @@ class WorkspaceRepository(context: Context) {
         }
         return ProjectStatus(
             projectName = if (project == activeWorkspace) "Workspace" else project.name,
+            workspacePath = if (project == activeWorkspace) "/workspace" else "/workspace/${project.name}",
             repository = git.exists(),
             branch = branch,
         )
@@ -42,9 +43,7 @@ class WorkspaceRepository(context: Context) {
             .onEnter { directory -> directory == project || directory.name !in IGNORED_DIRECTORIES }
             .maxDepth(MAX_DEPTH)
             .filter { it != project }
-            .filterNot { file ->
-                file.name == ".git" || file.path.contains("${File.separator}.git${File.separator}")
-            }
+            .filterNot { file -> file.name == ".git" || file.path.contains("${File.separator}.git${File.separator}") }
             .take(MAX_ENTRIES)
             .map { file ->
                 val relative = file.relativeTo(project).path.replace(File.separatorChar, '/')
@@ -62,10 +61,21 @@ class WorkspaceRepository(context: Context) {
     }
 
     fun preview(relativePath: String): Result<FilePreview> = runCatching {
-        val project = activeProjectRoot.canonicalFile
-        val target = File(project, relativePath).canonicalFile
-        require(target.path.startsWith(project.path + File.separator)) { "File berada di luar workspace" }
+        val target = resolveProjectFile(relativePath)
         require(target.isFile) { "File tidak ditemukan" }
+        val extension = target.extension.lowercase()
+        if (extension in IMAGE_EXTENSIONS && target.length() <= IMAGE_PREVIEW_LIMIT_BYTES) {
+            val bytes = target.readBytes()
+            return@runCatching FilePreview(
+                path = relativePath,
+                content = "",
+                sizeBytes = target.length(),
+                truncated = false,
+                binary = true,
+                kind = PreviewKind.IMAGE,
+                imageBytes = bytes,
+            )
+        }
 
         val output = ByteArrayOutputStream()
         target.inputStream().buffered().use { input ->
@@ -86,7 +96,31 @@ class WorkspaceRepository(context: Context) {
             sizeBytes = target.length(),
             truncated = target.length() > bytes.size,
             binary = binary,
+            kind = if (binary) PreviewKind.BINARY else PreviewKind.TEXT,
         )
+    }
+
+    fun saveText(relativePath: String, content: String): Result<FilePreview> = runCatching {
+        require(content.toByteArray(Charsets.UTF_8).size <= EDIT_LIMIT_BYTES) { "File terlalu besar untuk editor mobile" }
+        val target = resolveProjectFile(relativePath)
+        require(target.isFile) { "File tidak ditemukan" }
+        require(target.extension.lowercase() !in IMAGE_EXTENSIONS) { "Image tidak dapat disimpan sebagai text" }
+        target.writeText(content, Charsets.UTF_8)
+        FilePreview(
+            path = relativePath,
+            content = content,
+            sizeBytes = target.length(),
+            truncated = false,
+            binary = false,
+            kind = PreviewKind.TEXT,
+        )
+    }
+
+    private fun resolveProjectFile(relativePath: String): File {
+        val project = activeProjectRoot.canonicalFile
+        val target = File(project, relativePath).canonicalFile
+        require(target.path.startsWith(project.path + File.separator)) { "File berada di luar workspace" }
+        return target
     }
 
     private fun File.ensureStarterFiles() {
@@ -99,15 +133,20 @@ class WorkspaceRepository(context: Context) {
     private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
 
     companion object {
-        private const val MAX_DEPTH = 8
-        private const val MAX_ENTRIES = 350
-        private const val PREVIEW_LIMIT_BYTES = 160 * 1024
+        private const val MAX_DEPTH = 10
+        private const val MAX_ENTRIES = 600
+        private const val PREVIEW_LIMIT_BYTES = 512 * 1024
+        private const val EDIT_LIMIT_BYTES = 2 * 1024 * 1024
+        private const val IMAGE_PREVIEW_LIMIT_BYTES = 12L * 1024L * 1024L
+        private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
         private val IGNORED_DIRECTORIES = setOf(
             ".git",
             ".gradle",
             ".idea",
             ".next",
             ".cache",
+            ".turbo",
+            ".parcel-cache",
             "node_modules",
             "build",
             "dist",
@@ -127,19 +166,30 @@ data class WorkspaceEntry(
     val extension: String?,
 )
 
+enum class PreviewKind { TEXT, IMAGE, BINARY }
+
 data class FilePreview(
     val path: String,
     val content: String,
     val sizeBytes: Long,
     val truncated: Boolean,
     val binary: Boolean,
+    val kind: PreviewKind = if (binary) PreviewKind.BINARY else PreviewKind.TEXT,
+    val imageBytes: ByteArray? = null,
+)
+
+data class GitChange(
+    val status: String,
+    val path: String,
 )
 
 data class ProjectStatus(
     val projectName: String,
+    val workspacePath: String = "/workspace",
     val repository: Boolean,
     val branch: String? = null,
     val changedFiles: Int = 0,
+    val changedPaths: List<GitChange> = emptyList(),
     val ahead: Int = 0,
     val behind: Int = 0,
     val head: String? = null,

@@ -10,6 +10,7 @@ import dev.gravitycode.app.core.runtime.AntigravityRuntime
 import dev.gravitycode.app.core.runtime.AuthState
 import dev.gravitycode.app.core.runtime.RuntimeStatus
 import dev.gravitycode.app.core.workspace.FilePreview
+import dev.gravitycode.app.core.workspace.PreviewKind
 import dev.gravitycode.app.core.workspace.ProjectStatus
 import dev.gravitycode.app.core.workspace.WorkspaceEntry
 import dev.gravitycode.app.core.workspace.WorkspaceRepository
@@ -26,6 +27,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val runtime = AntigravityRuntime(application)
     private var runningJob: Job? = null
     private var projectRefreshJob: Job? = null
+    private var terminalJob: Job? = null
 
     private val _state = MutableStateFlow(
         AgentUiState(
@@ -48,14 +50,56 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun setPermissionMode(mode: PermissionMode) = _state.update { it.copy(permissionMode = mode) }
     fun setAuthCode(value: String) = _state.update { it.copy(authCode = value) }
     fun setCloneUrl(value: String) = _state.update { it.copy(cloneUrl = value) }
+    fun setTerminalCommand(value: String) = _state.update { it.copy(terminalCommand = value) }
+    fun setFileDraft(value: String) = _state.update { it.copy(fileDraft = value) }
     fun clearEvents() = _state.update { it.copy(events = emptyList()) }
-    fun closeFilePreview() = _state.update { it.copy(selectedFile = null) }
+    fun clearTerminal() = _state.update { it.copy(terminalEntries = emptyList()) }
+    fun closeFilePreview() = _state.update { it.copy(selectedFile = null, fileDraft = "", fileSaving = false) }
 
     fun selectFile(relativePath: String) {
         viewModelScope.launch(Dispatchers.IO) {
             workspaceRepository.preview(relativePath)
-                .onSuccess { preview -> _state.update { it.copy(selectedFile = preview) } }
-                .onFailure { error -> _state.update { it.copy(events = mergeEvent(it.events, AgentEvent.Error(error.message ?: "Gagal membuka file"))) } }
+                .onSuccess { preview ->
+                    _state.update {
+                        it.copy(
+                            selectedFile = preview,
+                            fileDraft = if (preview.kind == PreviewKind.TEXT) preview.content else "",
+                            fileSaving = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(events = mergeEvent(it.events, AgentEvent.Error(error.message ?: "Gagal membuka file"))) }
+                }
+        }
+    }
+
+    fun saveSelectedFile() {
+        val preview = state.value.selectedFile ?: return
+        if (preview.kind != PreviewKind.TEXT || state.value.fileSaving) return
+        val draft = state.value.fileDraft
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(fileSaving = true) }
+            workspaceRepository.saveText(preview.path, draft)
+                .onSuccess { updated ->
+                    _state.update {
+                        it.copy(
+                            selectedFile = updated,
+                            fileDraft = updated.content,
+                            fileSaving = false,
+                            events = mergeEvent(it.events, AgentEvent.Status("Saved ${updated.path}")),
+                        )
+                    }
+                    refreshProjectContext()
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            fileSaving = false,
+                            events = mergeEvent(it.events, AgentEvent.Error(error.message ?: "Gagal menyimpan file")),
+                        )
+                    }
+                }
         }
     }
 
@@ -125,7 +169,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runAgent() {
         val prompt = state.value.prompt.trim()
-        if (prompt.isEmpty() || state.value.running) return
+        if (prompt.isEmpty() || state.value.running || state.value.terminalRunning) return
         if (!state.value.runtimeStatus.available) {
             _state.update { it.copy(events = mergeEvent(it.events, AgentEvent.Error("Setup runtime dulu"))) }
             return
@@ -149,6 +193,38 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { current -> current.copy(events = mergeEvent(current.events, event)) }
             }
             _state.update { it.copy(running = false) }
+            refreshProjectContext()
+        }
+    }
+
+    fun runTerminalCommand() {
+        val command = state.value.terminalCommand.trim()
+        if (command.isEmpty() || state.value.terminalRunning || state.value.running) return
+        if (!state.value.runtimeStatus.available) {
+            _state.update { it.copy(terminalEntries = it.terminalEntries + TerminalEntry(command, "Runtime belum siap", -1)) }
+            return
+        }
+        val projectRoot = workspaceRepository.activeProjectRoot
+        terminalJob?.cancel()
+        _state.update { it.copy(terminalRunning = true, terminalCommand = "") }
+        terminalJob = viewModelScope.launch {
+            runtime.runShell(projectRoot, command)
+                .onSuccess { result ->
+                    _state.update {
+                        it.copy(
+                            terminalRunning = false,
+                            terminalEntries = (it.terminalEntries + TerminalEntry(command, result.output, result.exitCode)).takeLast(80),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            terminalRunning = false,
+                            terminalEntries = (it.terminalEntries + TerminalEntry(command, error.message ?: "Command failed", -1)).takeLast(80),
+                        )
+                    }
+                }
             refreshProjectContext()
         }
     }
@@ -210,6 +286,13 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+data class TerminalEntry(
+    val command: String,
+    val output: String,
+    val exitCode: Int,
+    val timestamp: Long = System.currentTimeMillis(),
+)
+
 data class AgentUiState(
     val prompt: String = "",
     val permissionMode: PermissionMode = PermissionMode.ACCEPT_EDITS,
@@ -217,6 +300,8 @@ data class AgentUiState(
     val workspaceFiles: List<WorkspaceEntry>,
     val repositoryStatus: ProjectStatus,
     val selectedFile: FilePreview? = null,
+    val fileDraft: String = "",
+    val fileSaving: Boolean = false,
     val authState: AuthState,
     val authCode: String = "",
     val cloneUrl: String = "",
@@ -226,4 +311,7 @@ data class AgentUiState(
     val installProgress: Float = 0f,
     val installMessage: String = "",
     val cloning: Boolean = false,
+    val terminalCommand: String = "",
+    val terminalEntries: List<TerminalEntry> = emptyList(),
+    val terminalRunning: Boolean = false,
 )

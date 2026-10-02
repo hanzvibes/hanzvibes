@@ -4,6 +4,7 @@ import android.content.Context
 import dev.gravitycode.app.core.model.AgentEvent
 import dev.gravitycode.app.core.model.PermissionMode
 import dev.gravitycode.app.core.model.ToolState
+import dev.gravitycode.app.core.workspace.GitChange
 import dev.gravitycode.app.core.workspace.ProjectStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -58,9 +59,11 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
     }
 
     suspend fun inspectRepository(projectRoot: File): ProjectStatus = withContext(Dispatchers.IO) {
+        val repository = File(projectRoot, ".git").exists()
         val base = ProjectStatus(
             projectName = projectRoot.name.ifBlank { "Workspace" },
-            repository = File(projectRoot, ".git").exists(),
+            workspacePath = if (repository) "/workspace/${projectRoot.name}" else "/workspace",
+            repository = repository,
         )
         if (!base.repository || !provisioner.isReady()) return@withContext base
 
@@ -76,19 +79,58 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
         }
         val ahead = Regex("ahead (\\d+)").find(header)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
         val behind = Regex("behind (\\d+)").find(header)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-        val changed = lines.drop(1).count()
+        val changedLines = lines.drop(1)
+        val changes = changedLines.take(150).mapNotNull { line ->
+            if (line.length < 3) return@mapNotNull null
+            GitChange(
+                status = line.take(2).trim().ifBlank { "?" },
+                path = line.drop(3).substringAfter(" -> ").trim(),
+            )
+        }
 
         val logResult = runGit(projectRoot, listOf("log", "-1", "--pretty=format:%h%x1f%s"))
         val logParts = logResult.output.trim().split('\u001f', limit = 2)
         base.copy(
             branch = branch,
-            changedFiles = changed,
+            changedFiles = changedLines.size,
+            changedPaths = changes,
             ahead = ahead,
             behind = behind,
             head = logParts.getOrNull(0)?.takeIf { it.isNotBlank() },
             latestCommit = logParts.getOrNull(1)?.takeIf { it.isNotBlank() },
             statusKnown = true,
         )
+    }
+
+    suspend fun runShell(projectRoot: File, shellCommand: String): Result<TerminalResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(provisioner.isReady()) { "Runtime belum siap" }
+            require(shellCommand.isNotBlank()) { "Command kosong" }
+            val command = AntigravitySandbox.guestCommand(
+                provisioner,
+                projectRoot,
+                "/bin/sh",
+                listOf("-lc", shellCommand),
+            )
+            val child = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(AntigravitySandbox.environment(provisioner)) }
+                .start()
+            val output = StringBuilder()
+            child.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    if (output.length < TERMINAL_OUTPUT_LIMIT) {
+                        output.appendLine(line)
+                    }
+                }
+            }
+            val completed = child.waitFor(2, TimeUnit.MINUTES)
+            if (!completed && child.isAlive) child.destroyForcibly()
+            TerminalResult(
+                exitCode = if (completed) child.exitValue() else -1,
+                output = if (completed) output.toString() else output.append("\n[command timed out]").toString(),
+            )
+        }
     }
 
     override fun run(prompt: String, workspace: File, permissionMode: PermissionMode): Flow<AgentEvent> = callbackFlow {
@@ -215,7 +257,13 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
         return CommandResult(if (completed) child.exitValue() else -1, output)
     }
 
+    data class TerminalResult(val exitCode: Int, val output: String)
+
     private data class CommandResult(val exitCode: Int, val output: String)
 
     private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
+
+    private companion object {
+        const val TERMINAL_OUTPUT_LIMIT = 200_000
+    }
 }
