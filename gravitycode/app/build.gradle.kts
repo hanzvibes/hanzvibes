@@ -14,6 +14,7 @@ android {
         create("gravityDebug") {
             storeFile = rootProject.file("keystore/gravitycode-debug.jks")
             storePassword = "gravitycode"
+            storeType = "JKS"
             keyAlias = "gravitycode"
             keyPassword = "gravitycode"
         }

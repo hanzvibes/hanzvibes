@@ -4,7 +4,6 @@
 
     <application
         android:allowBackup="false"
-        android:extractNativeLibs="true"
         android:label="GravityCode"
         android:supportsRtl="true"
         android:theme="@style/Theme.GravityCode">
