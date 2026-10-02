@@ -1,0 +1,36 @@
+name: GravityCode APK Build
+
+on:
+  push:
+    branches:
+      - gravitycode-apk-build
+    paths:
+      - 'gravitycode/**'
+      - '.github/workflows/gravitycode-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gravitycode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GravityCode-debug-apk
+          path: gravitycode/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
