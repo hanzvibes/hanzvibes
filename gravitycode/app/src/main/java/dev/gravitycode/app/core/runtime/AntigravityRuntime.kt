@@ -49,7 +49,9 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
                 .apply { environment().putAll(AntigravitySandbox.environment(provisioner)) }
                 .start()
             val output = child.inputStream.bufferedReader().use { it.readText() }
-            require(child.waitFor(3, TimeUnit.MINUTES) && child.exitValue() == 0) { output.takeLast(2000).ifBlank { "git clone gagal" } }
+            val completed = child.waitFor(3, TimeUnit.MINUTES)
+            if (!completed && child.isAlive) child.destroyForcibly()
+            require(completed && child.exitValue() == 0) { output.takeLast(2000).ifBlank { "git clone gagal" } }
             repoName
         }
     }
@@ -117,7 +119,7 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
                                     }
                                     "tool" -> {
                                         val info = step.optJSONObject("tool_info")
-                                        val name = info?.optString("name")?.ifBlank { null } ?: step.optString("tool_name", "tool")
+                                        val name = info?.optString("name")?.takeIf { it.isNotBlank() } ?: step.optString("tool_name", "tool")
                                         val done = step.optString("state") == "DONE"
                                         val errorText = info?.opt("error")?.toString()?.takeIf { it != "null" && it.isNotBlank() }
                                         val output = info?.optString("output").orEmpty()
