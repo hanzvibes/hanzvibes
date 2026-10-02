@@ -28,6 +28,8 @@ jobs:
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Prepare stable debug signing key
+        run: base64 -d keystore/gravitycode-debug.jks.b64 > keystore/gravitycode-debug.jks
       - name: Prepare embedded PRoot launcher
         run: python3 scripts/prepare_proot.py --output app/src/main/jniLibs
       - name: Inspect embedded native runtime

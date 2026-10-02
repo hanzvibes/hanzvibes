@@ -10,6 +10,15 @@ android {
     namespace = "dev.gravitycode.app"
     compileSdk = 36
 
+    signingConfigs {
+        create("gravityDebug") {
+            storeFile = rootProject.file("keystore/gravitycode-debug.jks")
+            storePassword = "gravitycode"
+            keyAlias = "gravitycode"
+            keyPassword = "gravitycode"
+        }
+    }
+
     defaultConfig {
         applicationId = "dev.gravitycode.app"
         minSdk = 28
@@ -18,6 +27,12 @@ android {
         versionName = "0.2.0"
         ndk {
             abiFilters += "arm64-v8a"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("gravityDebug")
         }
     }
 
