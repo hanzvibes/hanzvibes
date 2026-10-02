@@ -3,6 +3,11 @@ package dev.gravitycode.app.core.model
 sealed interface AgentEvent {
     val timestamp: Long
 
+    data class Prompt(
+        val text: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+    ) : AgentEvent
+
     data class Status(
         val text: String,
         override val timestamp: Long = System.currentTimeMillis(),

@@ -4,6 +4,7 @@ import android.content.Context
 import dev.gravitycode.app.core.model.AgentEvent
 import dev.gravitycode.app.core.model.PermissionMode
 import dev.gravitycode.app.core.model.ToolState
+import dev.gravitycode.app.core.workspace.ProjectStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -56,6 +57,40 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
         }
     }
 
+    suspend fun inspectRepository(projectRoot: File): ProjectStatus = withContext(Dispatchers.IO) {
+        val base = ProjectStatus(
+            projectName = projectRoot.name.ifBlank { "Workspace" },
+            repository = File(projectRoot, ".git").exists(),
+        )
+        if (!base.repository || !provisioner.isReady()) return@withContext base
+
+        val statusResult = runGit(projectRoot, listOf("status", "--porcelain=v1", "--branch", "--untracked-files=normal"))
+        if (statusResult.exitCode != 0) return@withContext base
+        val lines = statusResult.output.lines().filter { it.isNotBlank() }
+        val header = lines.firstOrNull()?.takeIf { it.startsWith("## ") }?.removePrefix("## ").orEmpty()
+        val branchRaw = header.substringBefore("...").substringBefore(" [").trim()
+        val branch = when {
+            branchRaw.isBlank() -> null
+            branchRaw.startsWith("HEAD") -> "detached"
+            else -> branchRaw
+        }
+        val ahead = Regex("ahead (\\d+)").find(header)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val behind = Regex("behind (\\d+)").find(header)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val changed = lines.drop(1).count()
+
+        val logResult = runGit(projectRoot, listOf("log", "-1", "--pretty=format:%h%x1f%s"))
+        val logParts = logResult.output.trim().split('\u001f', limit = 2)
+        base.copy(
+            branch = branch,
+            changedFiles = changed,
+            ahead = ahead,
+            behind = behind,
+            head = logParts.getOrNull(0)?.takeIf { it.isNotBlank() },
+            latestCommit = logParts.getOrNull(1)?.takeIf { it.isNotBlank() },
+            statusKnown = true,
+        )
+    }
+
     override fun run(prompt: String, workspace: File, permissionMode: PermissionMode): Flow<AgentEvent> = callbackFlow {
         if (!provisioner.isReady()) {
             trySend(AgentEvent.Error("Runtime belum siap. Tap Setup runtime."))
@@ -95,7 +130,7 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
             return@callbackFlow
         }
         process.set(child)
-        trySend(AgentEvent.Status("Antigravity menjalankan task di /workspace"))
+        trySend(AgentEvent.Status("Antigravity bekerja di ${workspace.name}"))
         trySend(AgentEvent.Tool("agy", "Agent started", ToolState.RUNNING))
 
         launch(Dispatchers.IO) {
@@ -167,6 +202,20 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
     override fun cancel() {
         process.getAndSet(null)?.let { if (it.isAlive) it.destroyForcibly() }
     }
+
+    private fun runGit(projectRoot: File, args: List<String>): CommandResult {
+        val command = AntigravitySandbox.guestCommand(provisioner, projectRoot, "/usr/bin/git", args)
+        val child = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .apply { environment().putAll(AntigravitySandbox.environment(provisioner)) }
+            .start()
+        val output = child.inputStream.bufferedReader().use { it.readText() }
+        val completed = child.waitFor(20, TimeUnit.SECONDS)
+        if (!completed && child.isAlive) child.destroyForcibly()
+        return CommandResult(if (completed) child.exitValue() else -1, output)
+    }
+
+    private data class CommandResult(val exitCode: Int, val output: String)
 
     private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
 }
