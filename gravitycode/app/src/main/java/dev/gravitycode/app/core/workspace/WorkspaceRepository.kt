@@ -105,6 +105,7 @@ class WorkspaceRepository(context: Context) {
         val target = resolveProjectFile(relativePath)
         require(target.isFile) { "File tidak ditemukan" }
         require(target.extension.lowercase() !in IMAGE_EXTENSIONS) { "Image tidak dapat disimpan sebagai text" }
+        require(target.length() <= PREVIEW_LIMIT_BYTES) { "File terlalu besar untuk diedit dengan aman. Gunakan terminal atau agent." }
         target.writeText(content, Charsets.UTF_8)
         FilePreview(
             path = relativePath,
@@ -115,6 +116,8 @@ class WorkspaceRepository(context: Context) {
             kind = PreviewKind.TEXT,
         )
     }
+
+    fun safeProjectFile(relativePath: String): Result<File> = runCatching { resolveProjectFile(relativePath) }
 
     private fun resolveProjectFile(relativePath: String): File {
         val project = activeProjectRoot.canonicalFile
@@ -181,6 +184,15 @@ data class FilePreview(
 data class GitChange(
     val status: String,
     val path: String,
+)
+
+data class GitDiff(
+    val path: String,
+    val status: String,
+    val patch: String,
+    val additions: Int,
+    val deletions: Int,
+    val binary: Boolean = false,
 )
 
 data class ProjectStatus(

@@ -5,6 +5,7 @@ import dev.gravitycode.app.core.model.AgentEvent
 import dev.gravitycode.app.core.model.PermissionMode
 import dev.gravitycode.app.core.model.ToolState
 import dev.gravitycode.app.core.workspace.GitChange
+import dev.gravitycode.app.core.workspace.GitDiff
 import dev.gravitycode.app.core.workspace.ProjectStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -14,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.OutputStreamWriter
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,6 +23,8 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
     private val provisioner = RuntimeProvisioner(context)
     val auth = AntigravityAuth(provisioner)
     private val process = AtomicReference<Process?>(null)
+    private val terminalProcess = AtomicReference<Process?>(null)
+    private val terminalWriter = AtomicReference<OutputStreamWriter?>(null)
 
     override fun status(): RuntimeStatus = RuntimeStatus(
         available = provisioner.isReady(),
@@ -102,6 +106,163 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
         )
     }
 
+    suspend fun loadDiff(projectRoot: File, path: String, statusHint: String? = null): Result<GitDiff> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(provisioner.isReady()) { "Runtime belum siap" }
+            require(File(projectRoot, ".git").exists()) { "Bukan Git repository" }
+            val safePath = safeRelativePath(projectRoot, path)
+            val status = statusHint?.takeIf { it.isNotBlank() } ?: runGit(
+                projectRoot,
+                listOf("status", "--porcelain=v1", "--", safePath),
+            ).output.lineSequence().firstOrNull()?.take(2)?.trim().orEmpty()
+
+            val patch = if (status == "??") {
+                val target = File(projectRoot, safePath)
+                when {
+                    !target.exists() -> "File tidak ditemukan."
+                    target.isDirectory -> "Untracked directory: $safePath"
+                    target.length() > DIFF_FILE_LIMIT -> "Untracked file terlalu besar untuk diff mobile (${target.length()} bytes)."
+                    else -> {
+                        val bytes = target.readBytes()
+                        if (bytes.take(4096).any { it == 0.toByte() }) {
+                            "Binary file: $safePath"
+                        } else {
+                            val text = String(bytes, Charsets.UTF_8)
+                            val lines = if (text.isEmpty()) emptyList() else text.split('\n')
+                            buildString {
+                                appendLine("diff --git a/$safePath b/$safePath")
+                                appendLine("new file mode 100644")
+                                appendLine("--- /dev/null")
+                                appendLine("+++ b/$safePath")
+                                appendLine("@@ -0,0 +1,${lines.size} @@")
+                                lines.forEach { append('+').appendLine(it) }
+                            }
+                        }
+                    }
+                }
+            } else {
+                val result = runGit(projectRoot, listOf("diff", "--no-ext-diff", "--no-color", "HEAD", "--", safePath))
+                require(result.exitCode == 0) { result.output.takeLast(1600).ifBlank { "git diff gagal" } }
+                result.output.ifBlank { "Tidak ada working-tree diff untuk $safePath." }
+            }
+
+            val additions = patch.lineSequence().count { it.startsWith("+") && !it.startsWith("+++") }
+            val deletions = patch.lineSequence().count { it.startsWith("-") && !it.startsWith("---") }
+            GitDiff(
+                path = safePath,
+                status = status.ifBlank { "M" },
+                patch = patch.take(DIFF_OUTPUT_LIMIT),
+                additions = additions,
+                deletions = deletions,
+                binary = patch.startsWith("Binary file:"),
+            )
+        }
+    }
+
+    suspend fun revertPath(projectRoot: File, path: String, statusHint: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(provisioner.isReady()) { "Runtime belum siap" }
+            require(File(projectRoot, ".git").exists()) { "Bukan Git repository" }
+            val safePath = safeRelativePath(projectRoot, path)
+            val status = statusHint?.takeIf { it.isNotBlank() } ?: runGit(
+                projectRoot,
+                listOf("status", "--porcelain=v1", "--", safePath),
+            ).output.lineSequence().firstOrNull()?.take(2)?.trim().orEmpty()
+
+            if (status == "??") {
+                val target = File(projectRoot, safePath).canonicalFile
+                val root = projectRoot.canonicalFile
+                require(target.path.startsWith(root.path + File.separator)) { "Path di luar project" }
+                require(target.exists()) { "File tidak ditemukan" }
+                require(target.deleteRecursively()) { "Gagal menghapus untracked path" }
+            } else {
+                val restore = runGit(projectRoot, listOf("restore", "--staged", "--worktree", "--", safePath))
+                if (restore.exitCode != 0) {
+                    val fallback = runGit(projectRoot, listOf("checkout", "HEAD", "--", safePath))
+                    require(fallback.exitCode == 0) { (restore.output + "\n" + fallback.output).takeLast(1800) }
+                }
+            }
+        }
+    }
+
+    fun terminalSession(projectRoot: File): Flow<TerminalChunk> = callbackFlow {
+        if (!provisioner.isReady()) {
+            trySend(TerminalChunk("Runtime belum siap.\n", closed = true, exitCode = -1))
+            close()
+            return@callbackFlow
+        }
+
+        stopTerminal()
+        val command = AntigravitySandbox.guestPtyCommand(
+            provisioner = provisioner,
+            workspace = projectRoot,
+            executable = "/bin/sh",
+            arguments = listOf("-i"),
+        )
+        val child = runCatching {
+            ProcessBuilder(command)
+                .directory(provisioner.runtimeDirectory)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(AntigravitySandbox.environment(provisioner)) }
+                .start()
+        }.getOrElse { error ->
+            trySend(TerminalChunk("Gagal membuka terminal: ${error.message}\n", closed = true, exitCode = -1))
+            close(error)
+            return@callbackFlow
+        }
+        terminalProcess.set(child)
+        val writer = OutputStreamWriter(child.outputStream, Charsets.UTF_8)
+        terminalWriter.set(writer)
+        trySend(TerminalChunk("\u001B[90m[GravityCode shell · ${projectRoot.name}]\u001B[0m\n"))
+
+        launch(Dispatchers.IO) {
+            var exitCode = -1
+            runCatching {
+                val input = child.inputStream
+                val buffer = ByteArray(4096)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    if (read > 0) trySend(TerminalChunk(String(buffer, 0, read, Charsets.UTF_8)))
+                }
+                exitCode = child.waitFor()
+            }.onFailure { error ->
+                trySend(TerminalChunk("\n[terminal error: ${error.message}]\n"))
+            }
+            terminalWriter.compareAndSet(writer, null)
+            terminalProcess.compareAndSet(child, null)
+            trySend(TerminalChunk("\n[terminal exited $exitCode]\n", closed = true, exitCode = exitCode))
+            close()
+        }
+
+        awaitClose {
+            terminalWriter.compareAndSet(writer, null)
+            runCatching { writer.close() }
+            if (child.isAlive) child.destroyForcibly()
+            terminalProcess.compareAndSet(child, null)
+        }
+    }
+
+    fun sendTerminalInput(input: String): Boolean {
+        val child = terminalProcess.get()
+        val writer = terminalWriter.get()
+        if (child?.isAlive != true || writer == null) return false
+        return runCatching {
+            writer.write(input)
+            writer.flush()
+            true
+        }.getOrDefault(false)
+    }
+
+    fun interruptTerminal(): Boolean = sendTerminalInput("\u0003")
+    fun terminalTab(): Boolean = sendTerminalInput("\t")
+    fun isTerminalAlive(): Boolean = terminalProcess.get()?.isAlive == true
+
+    fun stopTerminal() {
+        terminalWriter.getAndSet(null)?.let { runCatching { it.close() } }
+        terminalProcess.getAndSet(null)?.let { child -> if (child.isAlive) child.destroyForcibly() }
+    }
+
     suspend fun runShell(projectRoot: File, shellCommand: String): Result<TerminalResult> = withContext(Dispatchers.IO) {
         runCatching {
             require(provisioner.isReady()) { "Runtime belum siap" }
@@ -117,17 +278,23 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
                 .apply { environment().putAll(AntigravitySandbox.environment(provisioner)) }
                 .start()
             val output = StringBuilder()
-            child.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    if (output.length < TERMINAL_OUTPUT_LIMIT) {
-                        output.appendLine(line)
-                    }
+            val reader = child.inputStream.bufferedReader()
+            val started = System.nanoTime()
+            while (child.isAlive && TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 120) {
+                while (reader.ready()) {
+                    val line = reader.readLine() ?: break
+                    if (output.length < TERMINAL_OUTPUT_LIMIT) output.appendLine(line)
                 }
+                Thread.sleep(20)
             }
-            val completed = child.waitFor(2, TimeUnit.MINUTES)
-            if (!completed && child.isAlive) child.destroyForcibly()
+            if (child.isAlive) child.destroyForcibly()
+            while (reader.ready() && output.length < TERMINAL_OUTPUT_LIMIT) {
+                val line = reader.readLine() ?: break
+                output.appendLine(line)
+            }
+            val completed = !child.isAlive
             TerminalResult(
-                exitCode = if (completed) child.exitValue() else -1,
+                exitCode = if (completed) runCatching { child.exitValue() }.getOrDefault(-1) else -1,
                 output = if (completed) output.toString() else output.append("\n[command timed out]").toString(),
             )
         }
@@ -200,7 +367,7 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
                                         val done = step.optString("state") == "DONE"
                                         val errorText = info?.opt("error")?.toString()?.takeIf { it != "null" && it.isNotBlank() }
                                         val output = info?.optString("output").orEmpty()
-                                        val detail = output.takeLast(1200).ifBlank { if (done) "Completed" else "Running" }
+                                        val detail = output.takeLast(4000).ifBlank { if (done) "Completed" else "Running" }
                                         trySend(AgentEvent.Tool(name, errorText ?: detail, when {
                                             !done -> ToolState.RUNNING
                                             errorText != null -> ToolState.FAILED
@@ -257,7 +424,15 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
         return CommandResult(if (completed) child.exitValue() else -1, output)
     }
 
+    private fun safeRelativePath(projectRoot: File, path: String): String {
+        val root = projectRoot.canonicalFile
+        val target = File(root, path).canonicalFile
+        require(target.path.startsWith(root.path + File.separator)) { "Path berada di luar repository" }
+        return target.relativeTo(root).path.replace(File.separatorChar, '/')
+    }
+
     data class TerminalResult(val exitCode: Int, val output: String)
+    data class TerminalChunk(val text: String, val closed: Boolean = false, val exitCode: Int? = null)
 
     private data class CommandResult(val exitCode: Int, val output: String)
 
@@ -265,5 +440,7 @@ class AntigravityRuntime(context: Context) : AgentRuntime {
 
     private companion object {
         const val TERMINAL_OUTPUT_LIMIT = 200_000
+        const val DIFF_OUTPUT_LIMIT = 400_000
+        const val DIFF_FILE_LIMIT = 1_000_000L
     }
 }

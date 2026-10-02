@@ -10,6 +10,7 @@ import dev.gravitycode.app.core.runtime.AntigravityRuntime
 import dev.gravitycode.app.core.runtime.AuthState
 import dev.gravitycode.app.core.runtime.RuntimeStatus
 import dev.gravitycode.app.core.workspace.FilePreview
+import dev.gravitycode.app.core.workspace.GitDiff
 import dev.gravitycode.app.core.workspace.PreviewKind
 import dev.gravitycode.app.core.workspace.ProjectStatus
 import dev.gravitycode.app.core.workspace.WorkspaceEntry
@@ -28,6 +29,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private var runningJob: Job? = null
     private var projectRefreshJob: Job? = null
     private var terminalJob: Job? = null
+    private var terminalProjectPath: String? = null
 
     private val _state = MutableStateFlow(
         AgentUiState(
@@ -50,11 +52,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun setPermissionMode(mode: PermissionMode) = _state.update { it.copy(permissionMode = mode) }
     fun setAuthCode(value: String) = _state.update { it.copy(authCode = value) }
     fun setCloneUrl(value: String) = _state.update { it.copy(cloneUrl = value) }
-    fun setTerminalCommand(value: String) = _state.update { it.copy(terminalCommand = value) }
+    fun setTerminalCommand(value: String) = _state.update { it.copy(terminalCommand = value, terminalHistoryIndex = null) }
     fun setFileDraft(value: String) = _state.update { it.copy(fileDraft = value) }
     fun clearEvents() = _state.update { it.copy(events = emptyList()) }
-    fun clearTerminal() = _state.update { it.copy(terminalEntries = emptyList()) }
+    fun clearTerminal() = _state.update { it.copy(terminalOutput = "") }
     fun closeFilePreview() = _state.update { it.copy(selectedFile = null, fileDraft = "", fileSaving = false) }
+    fun closeDiff() = _state.update { it.copy(selectedDiff = null, diffError = null, diffLoading = false, diffReverting = false) }
 
     fun selectFile(relativePath: String) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -76,7 +79,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveSelectedFile() {
         val preview = state.value.selectedFile ?: return
-        if (preview.kind != PreviewKind.TEXT || state.value.fileSaving) return
+        if (preview.kind != PreviewKind.TEXT || preview.truncated || state.value.fileSaving) return
         val draft = state.value.fileDraft
         viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(fileSaving = true) }
@@ -99,6 +102,45 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                             events = mergeEvent(it.events, AgentEvent.Error(error.message ?: "Gagal menyimpan file")),
                         )
                     }
+                }
+        }
+    }
+
+    fun selectDiff(path: String, status: String) {
+        if (state.value.diffLoading) return
+        val projectRoot = workspaceRepository.activeProjectRoot
+        viewModelScope.launch {
+            _state.update { it.copy(diffLoading = true, diffError = null, selectedDiff = null) }
+            runtime.loadDiff(projectRoot, path, status)
+                .onSuccess { diff ->
+                    _state.update { it.copy(diffLoading = false, selectedDiff = diff, diffError = null) }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(diffLoading = false, diffError = error.message ?: "Gagal memuat diff") }
+                }
+        }
+    }
+
+    fun revertSelectedDiff() {
+        val diff = state.value.selectedDiff ?: return
+        if (state.value.diffReverting) return
+        val projectRoot = workspaceRepository.activeProjectRoot
+        viewModelScope.launch {
+            _state.update { it.copy(diffReverting = true) }
+            runtime.revertPath(projectRoot, diff.path, diff.status)
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            diffReverting = false,
+                            selectedDiff = null,
+                            diffError = null,
+                            events = mergeEvent(it.events, AgentEvent.Status("Reverted ${diff.path}")),
+                        )
+                    }
+                    refreshProjectContext()
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(diffReverting = false, diffError = error.message ?: "Revert gagal") }
                 }
         }
     }
@@ -152,6 +194,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(cloning = true, events = mergeEvent(it.events, AgentEvent.Status("Cloning $url"))) }
             runtime.cloneRepository(url, workspaceRepository.activeWorkspace)
                 .onSuccess { name ->
+                    stopTerminalSession()
                     _state.update { current ->
                         current.copy(
                             cloning = false,
@@ -169,7 +212,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runAgent() {
         val prompt = state.value.prompt.trim()
-        if (prompt.isEmpty() || state.value.running || state.value.terminalRunning) return
+        if (prompt.isEmpty() || state.value.running) return
         if (!state.value.runtimeStatus.available) {
             _state.update { it.copy(events = mergeEvent(it.events, AgentEvent.Error("Setup runtime dulu"))) }
             return
@@ -197,36 +240,100 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun runTerminalCommand() {
-        val command = state.value.terminalCommand.trim()
-        if (command.isEmpty() || state.value.terminalRunning || state.value.running) return
-        if (!state.value.runtimeStatus.available) {
-            _state.update { it.copy(terminalEntries = it.terminalEntries + TerminalEntry(command, "Runtime belum siap", -1)) }
+    fun startTerminalSession() {
+        if (!state.value.runtimeStatus.available) return
+        val projectRoot = workspaceRepository.activeProjectRoot
+        val canonical = runCatching { projectRoot.canonicalPath }.getOrDefault(projectRoot.absolutePath)
+        if (state.value.terminalRunning && terminalProjectPath == canonical && runtime.isTerminalAlive()) return
+
+        stopTerminalSession()
+        terminalProjectPath = canonical
+        _state.update {
+            it.copy(
+                terminalRunning = true,
+                terminalOutput = if (it.terminalOutput.isBlank()) "" else it.terminalOutput + "\n",
+            )
+        }
+        terminalJob = viewModelScope.launch {
+            runtime.terminalSession(projectRoot).collect { chunk ->
+                _state.update { current ->
+                    val normalized = chunk.text.replace("\r\n", "\n").replace('\r', '\n')
+                    current.copy(
+                        terminalOutput = (current.terminalOutput + normalized).takeLast(TERMINAL_BUFFER_LIMIT),
+                        terminalRunning = !chunk.closed,
+                    )
+                }
+            }
+            _state.update { it.copy(terminalRunning = false) }
+        }
+    }
+
+    fun submitTerminalCommand() {
+        val command = state.value.terminalCommand.trimEnd()
+        if (command.isBlank()) return
+        if (!state.value.terminalRunning || !runtime.isTerminalAlive()) {
+            startTerminalSession()
+            _state.update {
+                it.copy(terminalOutput = (it.terminalOutput + "\n[terminal starting; run command again when ready]\n").takeLast(TERMINAL_BUFFER_LIMIT))
+            }
             return
         }
-        val projectRoot = workspaceRepository.activeProjectRoot
-        terminalJob?.cancel()
-        _state.update { it.copy(terminalRunning = true, terminalCommand = "") }
-        terminalJob = viewModelScope.launch {
-            runtime.runShell(projectRoot, command)
-                .onSuccess { result ->
-                    _state.update {
-                        it.copy(
-                            terminalRunning = false,
-                            terminalEntries = (it.terminalEntries + TerminalEntry(command, result.output, result.exitCode)).takeLast(80),
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    _state.update {
-                        it.copy(
-                            terminalRunning = false,
-                            terminalEntries = (it.terminalEntries + TerminalEntry(command, error.message ?: "Command failed", -1)).takeLast(80),
-                        )
-                    }
-                }
-            refreshProjectContext()
+        val sent = runtime.sendTerminalInput(command + "\n")
+        if (sent) {
+            _state.update {
+                it.copy(
+                    terminalCommand = "",
+                    terminalHistory = (it.terminalHistory + command).takeLast(100),
+                    terminalHistoryIndex = null,
+                )
+            }
         }
+    }
+
+    fun terminalInterrupt() {
+        if (!runtime.interruptTerminal()) {
+            _state.update { it.copy(terminalOutput = (it.terminalOutput + "\n[terminal is not running]\n").takeLast(TERMINAL_BUFFER_LIMIT)) }
+        }
+    }
+
+    fun terminalTab() {
+        runtime.terminalTab()
+    }
+
+    fun terminalHistoryPrevious() {
+        _state.update { current ->
+            if (current.terminalHistory.isEmpty()) return@update current
+            val next = when (val index = current.terminalHistoryIndex) {
+                null -> current.terminalHistory.lastIndex
+                else -> (index - 1).coerceAtLeast(0)
+            }
+            current.copy(terminalHistoryIndex = next, terminalCommand = current.terminalHistory[next])
+        }
+    }
+
+    fun terminalHistoryNext() {
+        _state.update { current ->
+            val index = current.terminalHistoryIndex ?: return@update current
+            if (index >= current.terminalHistory.lastIndex) {
+                current.copy(terminalHistoryIndex = null, terminalCommand = "")
+            } else {
+                val next = index + 1
+                current.copy(terminalHistoryIndex = next, terminalCommand = current.terminalHistory[next])
+            }
+        }
+    }
+
+    fun restartTerminalSession() {
+        stopTerminalSession()
+        startTerminalSession()
+    }
+
+    fun stopTerminalSession() {
+        terminalJob?.cancel()
+        terminalJob = null
+        terminalProjectPath = null
+        runtime.stopTerminal()
+        _state.update { it.copy(terminalRunning = false) }
     }
 
     fun cancel() {
@@ -238,6 +345,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshProjectContext() {
         val local = workspaceRepository.localStatus()
+        val oldProject = state.value.repositoryStatus.workspacePath
         _state.update {
             it.copy(
                 runtimeStatus = runtime.status(),
@@ -245,6 +353,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 repositoryStatus = local,
             )
         }
+        if (oldProject != local.workspacePath && state.value.terminalRunning) stopTerminalSession()
         if (!runtime.status().available) return
         val projectRoot = workspaceRepository.activeProjectRoot
         projectRefreshJob?.cancel()
@@ -275,7 +384,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     val runningIndex = result.indexOfLast {
                         it is AgentEvent.Tool && it.name == event.name && it.state == ToolState.RUNNING
                     }
-                    if (runningIndex >= 0) result[runningIndex] = event else result += event
+                    if (runningIndex >= 0) {
+                        val started = result[runningIndex] as AgentEvent.Tool
+                        result[runningIndex] = event.copy(timestamp = started.timestamp)
+                    } else {
+                        result += event
+                    }
                 } else {
                     result += event
                 }
@@ -284,14 +398,17 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
         return result.takeLast(240)
     }
-}
 
-data class TerminalEntry(
-    val command: String,
-    val output: String,
-    val exitCode: Int,
-    val timestamp: Long = System.currentTimeMillis(),
-)
+    override fun onCleared() {
+        runtime.cancel()
+        runtime.stopTerminal()
+        super.onCleared()
+    }
+
+    private companion object {
+        const val TERMINAL_BUFFER_LIMIT = 220_000
+    }
+}
 
 data class AgentUiState(
     val prompt: String = "",
@@ -302,6 +419,10 @@ data class AgentUiState(
     val selectedFile: FilePreview? = null,
     val fileDraft: String = "",
     val fileSaving: Boolean = false,
+    val selectedDiff: GitDiff? = null,
+    val diffLoading: Boolean = false,
+    val diffError: String? = null,
+    val diffReverting: Boolean = false,
     val authState: AuthState,
     val authCode: String = "",
     val cloneUrl: String = "",
@@ -312,6 +433,8 @@ data class AgentUiState(
     val installMessage: String = "",
     val cloning: Boolean = false,
     val terminalCommand: String = "",
-    val terminalEntries: List<TerminalEntry> = emptyList(),
+    val terminalOutput: String = "",
     val terminalRunning: Boolean = false,
+    val terminalHistory: List<String> = emptyList(),
+    val terminalHistoryIndex: Int? = null,
 )

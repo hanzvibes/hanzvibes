@@ -46,12 +46,34 @@ object AntigravitySandbox {
         }
     }
 
+    fun guestPtyCommand(
+        provisioner: RuntimeProvisioner,
+        workspace: File,
+        executable: String,
+        arguments: List<String> = emptyList(),
+    ): List<String> {
+        val suite = provisioner.suite()
+        val guest = (listOf(executable) + arguments).joinToString(" ", transform = ::shellQuote)
+        return buildList {
+            addAll(provisioner.baseProotCommand(suite))
+            add("-b")
+            add("${workspace.absolutePath}:/workspace")
+            add("-w")
+            add("/workspace")
+            add("/usr/bin/script")
+            add("-qefc")
+            add("stty rows 32 cols 120 2>/dev/null; export PS1='gravitycode:\\w$ '; exec $guest")
+            add("/dev/null")
+        }
+    }
+
     fun environment(provisioner: RuntimeProvisioner): Map<String, String> {
         val suite = provisioner.suite()
         return provisioner.hostEnvironment(suite) + mapOf(
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/bin:/system/xbin",
             "HOME" to "/root",
             "TERM" to "xterm-256color",
+            "COLORTERM" to "truecolor",
             "AGY_CLI_DISABLE_AUTO_UPDATE" to "1",
             "AGY_CLI_HIDE_ACCOUNT_INFO" to "1",
             "SSL_CERT_FILE" to "/etc/ssl/certs/ca-certificates.crt",
