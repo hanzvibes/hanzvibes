@@ -14,8 +14,11 @@ android {
         applicationId = "dev.gravitycode.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildFeatures {
@@ -30,6 +33,7 @@ android {
 
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        jniLibs.useLegacyPackaging = true
     }
 }
 
@@ -48,5 +52,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
     implementation("androidx.compose.foundation:foundation:1.8.3")
     implementation("androidx.compose.material3:material3:1.3.2")
+    implementation("org.apache.commons:commons-compress:1.27.1")
     debugImplementation("androidx.compose.ui:ui-tooling:1.8.3")
 }

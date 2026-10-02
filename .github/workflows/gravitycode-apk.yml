@@ -28,11 +28,19 @@ jobs:
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Prepare embedded PRoot launcher
+        run: python3 scripts/prepare_proot.py --output app/src/main/jniLibs
+      - name: Inspect embedded native runtime
+        run: find app/src/main/jniLibs -type f -maxdepth 3 -print -exec file {} \;
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+      - name: Verify APK signature and package
+        run: |
+          /usr/local/lib/android/sdk/build-tools/36.0.0/apksigner verify --verbose app/build/outputs/apk/debug/app-debug.apk
+          /usr/local/lib/android/sdk/build-tools/36.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | head -n 6
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GravityCode-debug-apk
+          name: GravityCode-v0.2-debug-apk
           path: gravitycode/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
